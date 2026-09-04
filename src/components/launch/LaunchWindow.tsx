@@ -220,9 +220,14 @@ function LaunchWindowContent() {
 		/>
 	);
 
+	// TODO(upstream): hide the picker on Linux only when the portal actually
+	// supports ScreenCast; on X11 without a screencast portal (e.g. Cinnamon)
+	// the picker is the only working capture path.
+	const showSourcePicker = true;
+
 	const idleControls = (
 		<>
-			{platform !== "linux" && (
+			{showSourcePicker && (
 				<>
 					<SourcePopover
 						selectedSource={selectedSource}
