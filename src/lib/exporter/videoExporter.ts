@@ -216,7 +216,8 @@ export class VideoExporter {
 			this.renderer = new FrameRenderer({
 				width: this.config.width,
 				height: this.config.height,
-				preferredRenderBackend: undefined,
+				// Prefer WebGL: see the matching note in ModernVideoExporter.
+				preferredRenderBackend: "webgl",
 				wallpaper: this.config.wallpaper,
 				zoomRegions: this.config.zoomRegions,
 				showShadow: this.config.showShadow,

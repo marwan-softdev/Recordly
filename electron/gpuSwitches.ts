@@ -2,6 +2,7 @@ export interface GpuSwitches {
 	useAngle?: string;
 	useGl?: string;
 	disableFeatures?: string[];
+	switches?: string[];
 }
 
 function normalizeLinuxWindowSystem(value: string | undefined): "wayland" | "x11" | null {
@@ -57,7 +58,16 @@ export function getGpuSwitches(
 
 	if (platform === "linux") {
 		return {
-			...(shouldForceLinuxEgl(env) ? { useGl: "angle" } : {}),
+			...(shouldForceLinuxEgl(env)
+				? {
+						useGl: "angle",
+						useAngle: "swiftshader",
+						// Electron 43 requires an explicit opt-in before software
+						// WebGL is granted; without it WebGL contexts are refused
+						// entirely when the hardware path is unavailable.
+						switches: ["enable-unsafe-swiftshader"],
+					}
+				: {}),
 			disableFeatures: ["VaapiVideoDecoder", "VaapiVideoEncoder"],
 		};
 	}

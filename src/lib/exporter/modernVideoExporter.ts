@@ -588,7 +588,11 @@ export class ModernVideoExporter {
 				this.renderer = new ModernFrameRenderer({
 					width: this.config.width,
 					height: this.config.height,
-					preferredRenderBackend: undefined,
+					// Prefer WebGL: the WebGPU renderer path is not reliable in all
+					// environments (e.g. Linux where Dawn swap-chain shared images
+					// can fail) and a failed attempt can take the whole export
+					// down instead of falling back.
+					preferredRenderBackend: "webgl",
 					wallpaper: this.config.wallpaper,
 					zoomRegions: this.config.zoomRegions,
 					showShadow: this.config.showShadow,
