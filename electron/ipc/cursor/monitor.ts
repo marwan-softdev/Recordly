@@ -2,12 +2,17 @@ import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import { BrowserWindow } from "electron";
-import { ensureNativeCursorMonitorBinary, getCursorMonitorExePath } from "../paths/binaries";
+import {
+	ensureNativeCursorMonitorBinary,
+	getCursorMonitorExePath,
+	getPrebundledNativeHelperPath,
+} from "../paths/binaries";
 import {
 	currentCursorVisualType,
 	nativeCursorMonitorOutputBuffer,
 	nativeCursorMonitorProcess,
 	setCurrentCursorVisualType,
+	setLinuxCursorScreenPoint,
 	setNativeCursorMonitorOutputBuffer,
 	setNativeCursorMonitorProcess,
 } from "../state";
@@ -36,6 +41,18 @@ export function handleCursorMonitorStdout(chunk: Buffer) {
 				const button = Number(interactionMatch[2]);
 				recordCursorMouseDown(button === 2 || button === 3 ? button : 1);
 			}
+			continue;
+		}
+
+		const positionMatch = line.match(/^POSITION:(-?\d+):(-?\d+)$/);
+		if (positionMatch && process.platform === "linux") {
+			// Authoritative X server coordinates from the native helper; the
+			// same state the uiohook mousemove cache feeds on Linux.
+			setLinuxCursorScreenPoint({
+				x: Number(positionMatch[1]),
+				y: Number(positionMatch[2]),
+				updatedAt: Date.now(),
+			});
 			continue;
 		}
 
@@ -87,7 +104,7 @@ export function stopNativeCursorMonitor() {
 export async function startNativeCursorMonitor() {
 	stopNativeCursorMonitor();
 
-	if (process.platform !== "darwin" && process.platform !== "win32") {
+	if (process.platform !== "darwin" && process.platform !== "win32" && process.platform !== "linux") {
 		setCurrentCursorVisualType("arrow");
 		return;
 	}
@@ -101,6 +118,17 @@ export async function startNativeCursorMonitor() {
 				await fs.access(helperPath, fsConstants.F_OK);
 			} catch {
 				console.warn("Windows cursor monitor helper missing:", helperPath);
+				setCurrentCursorVisualType("arrow");
+				return;
+			}
+		} else if (process.platform === "linux") {
+			helperPath = getPrebundledNativeHelperPath("cursor-monitor");
+			try {
+				await fs.access(helperPath, fsConstants.X_OK);
+			} catch {
+				// Missing helper (e.g. built without libx11-dev): position falls
+				// back to the uiohook cache and the cursor type stays "arrow".
+				console.warn("Linux cursor monitor helper missing:", helperPath);
 				setCurrentCursorVisualType("arrow");
 				return;
 			}
