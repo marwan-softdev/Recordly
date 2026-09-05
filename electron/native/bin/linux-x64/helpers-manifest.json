@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "platform": "linux",
+  "arch": "x64",
+  "helpers": {
+    "cursor-monitor": {
+      "binaryName": "cursor-monitor",
+      "binarySha256": "0675eb4834ec16e03907d0b2f4b3828acdf118c2037741256facb00de17c3b89",
+      "sourceDir": "electron/native/cursor-monitor-linux",
+      "sourceFingerprint": "914396142738c94a4cf7ef0abaa20a9d9e29d9ee4bdc3306cc3b77501fdca1b2",
+      "updatedAt": "2026-09-04T13:07:11.597Z"
+    }
+  }
+}
