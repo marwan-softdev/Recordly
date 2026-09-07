@@ -423,6 +423,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const startInFlight = useRef(false);
 	const hasPromptedForReselect = useRef(false);
 	const hasShownNativeWindowsFallbackToast = useRef(false);
+	const hasShownNativeLinuxFallbackToast = useRef(false);
 	const countdownDelayLoaded = useRef(false);
 	const recordingPrefsLoaded = useRef(false);
 	const pendingWebcamPathPromise = useRef<Promise<string | null> | null>(null);
@@ -1202,8 +1203,32 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 		}
 
+		let useNativeLinuxCapture = false;
+		if (
+			platform === "linux" &&
+			selectedSource.id?.startsWith("screen:") &&
+			typeof window.electronAPI.isNativeLinuxCaptureAvailable === "function"
+		) {
+			try {
+				const nativeLinuxResult =
+					await window.electronAPI.isNativeLinuxCaptureAvailable();
+				useNativeLinuxCapture = nativeLinuxResult.available;
+			} catch {
+				useNativeLinuxCapture = false;
+			}
+			if (!useNativeLinuxCapture && !hasShownNativeLinuxFallbackToast.current) {
+				hasShownNativeLinuxFallbackToast.current = true;
+				toast.info(
+					"Native Linux capture is unavailable. Falling back to browser capture.",
+				);
+			}
+		}
+
 		let micLabel: string | undefined;
-		if ((useNativeMacScreenCapture || useNativeWindowsCapture) && microphoneEnabled) {
+		if (
+			(useNativeMacScreenCapture || useNativeWindowsCapture || useNativeLinuxCapture) &&
+			microphoneEnabled
+		) {
 			try {
 				const devices = await navigator.mediaDevices.enumerateDevices();
 				const mic = devices.find(
@@ -1220,6 +1245,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			selectedSource,
 			useNativeMacScreenCapture,
 			useNativeWindowsCapture,
+			useNativeLinuxCapture,
 			micLabel,
 		};
 	}, [
@@ -1703,10 +1729,19 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return;
 			}
 
-			const { selectedSource, useNativeMacScreenCapture, useNativeWindowsCapture, micLabel } =
-				preparedStart;
-			const useNativeCapture = useNativeMacScreenCapture || useNativeWindowsCapture;
-			const shouldWarmStartNativeCapture = useNativeCapture && countdownDelay > 0;
+			const {
+				selectedSource,
+				useNativeMacScreenCapture,
+				useNativeWindowsCapture,
+				useNativeLinuxCapture,
+				micLabel,
+			} = preparedStart;
+			const useNativeCapture =
+				useNativeMacScreenCapture || useNativeWindowsCapture || useNativeLinuxCapture;
+			// Linux native capture cannot pause yet, so the countdown must run
+			// before the capture starts instead of the warm-start dance.
+			const shouldWarmStartNativeCapture =
+				useNativeCapture && countdownDelay > 0 && !useNativeLinuxCapture;
 			if (countdownDelay > 0 && !shouldWarmStartNativeCapture) {
 				setCountdownActive(true);
 				try {
@@ -1752,17 +1787,17 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					return;
 				}
 				if (!nativeResult.success) {
-					if (useNativeWindowsCapture) {
+					if (useNativeWindowsCapture || useNativeLinuxCapture) {
 						nativeWindowsCaptureStartFailed = true;
 						console.warn(
-							"Native Windows capture failed, falling back to browser capture:",
+							"Native capture failed, falling back to browser capture:",
 							nativeResult.error ?? nativeResult.message,
 						);
 						void logNativeCaptureDiagnostics("start-native-screen-recording");
 						if (!hasShownNativeWindowsFallbackToast.current) {
 							hasShownNativeWindowsFallbackToast.current = true;
 							toast.warning(
-								"Native Windows capture failed to start. Falling back to browser capture.",
+								"Native capture failed to start. Falling back to browser capture.",
 							);
 						}
 					} else if (!nativeResult.userNotified) {
@@ -1992,8 +2027,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					maxFrameRate: TARGET_FRAME_RATE,
 					minFrameRate: MIN_FRAME_RATE,
 					googCaptureCursor: browserCursorPolicy.streamCursor === "always",
+					// The cursor mode lives inside mandatory here: Chromium reads
+					// it as a legacy video constraint alongside chromeMediaSource,
+					// and a top-level `cursor` is silently ignored (the OS cursor
+					// stayed burned into Linux captures).
+					cursor: browserCursorPolicy.streamCursor,
 				},
-				cursor: browserCursorPolicy.streamCursor,
 			};
 
 			if (wantsAudioCapture) {
