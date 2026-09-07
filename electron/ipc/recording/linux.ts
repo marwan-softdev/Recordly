@@ -99,24 +99,81 @@ function probeFfmpegCapabilities(ffmpegPath: string) {
 	return ffmpegCapabilitiesProbe;
 }
 
-export async function isNativeLinuxCaptureAvailable(): Promise<boolean> {
-	if (process.platform !== "linux") return false;
-	if (!isX11CaptureSession(process.env)) return false;
+export type LinuxCaptureUnavailableReason =
+	| "not-linux"
+	| "wayland-session"
+	| "no-x11-display"
+	| "no-ffmpeg-binary"
+	| "no-x11grab"
+	| "no-libx264"
+	| "probe-failed";
+
+export type LinuxCaptureAvailability = {
+	available: boolean;
+	reason?: LinuxCaptureUnavailableReason;
+};
+
+export function describeLinuxCaptureUnavailableReason(
+	reason: LinuxCaptureUnavailableReason | undefined,
+): string {
+	switch (reason) {
+		case "wayland-session":
+			return "Native Linux capture needs an X11 session, but this session is running Wayland.";
+		case "no-x11-display":
+			return "Native Linux capture could not find an X11 display to record.";
+		case "no-ffmpeg-binary":
+			return "Native Linux capture needs an ffmpeg binary, but none was found.";
+		case "no-x11grab":
+			return "The installed ffmpeg build does not support x11grab screen capture.";
+		case "no-libx264":
+			return "The installed ffmpeg build does not support the required H.264 encoder.";
+		case "probe-failed":
+			return "Native Linux capture could not be verified because the ffmpeg probe failed.";
+		case "not-linux":
+			return "Native Linux capture is only available on Linux.";
+		default:
+			return "Native Linux capture is not available on this system.";
+	}
+}
+
+export async function probeNativeLinuxCaptureAvailability(): Promise<LinuxCaptureAvailability> {
+	if (process.platform !== "linux") {
+		return { available: false, reason: "not-linux" };
+	}
+	if (
+		process.env.XDG_SESSION_TYPE === "wayland" ||
+		(process.env.WAYLAND_DISPLAY && process.env.WAYLAND_DISPLAY.trim().length > 0)
+	) {
+		return { available: false, reason: "wayland-session" };
+	}
+	if (!isX11CaptureSession(process.env)) {
+		return { available: false, reason: "no-x11-display" };
+	}
 
 	let ffmpegPath: string;
 	try {
 		ffmpegPath = getFfmpegBinaryPath();
 	} catch {
-		return false;
+		return { available: false, reason: "no-ffmpeg-binary" };
 	}
 
 	try {
 		const capabilities = await probeFfmpegCapabilities(ffmpegPath);
-		return capabilities.x11grab && capabilities.libx264;
+		if (!capabilities.x11grab) {
+			return { available: false, reason: "no-x11grab" };
+		}
+		if (!capabilities.libx264) {
+			return { available: false, reason: "no-libx264" };
+		}
+		return { available: true };
 	} catch (error) {
 		console.warn("Failed to probe ffmpeg capabilities for native Linux capture:", error);
-		return false;
+		return { available: false, reason: "probe-failed" };
 	}
+}
+
+export async function isNativeLinuxCaptureAvailable(): Promise<boolean> {
+	return (await probeNativeLinuxCaptureAvailability()).available;
 }
 
 export function waitForLinuxCaptureStart(proc: ChildProcessWithoutNullStreams) {

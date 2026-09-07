@@ -45,6 +45,7 @@ export type NativeCaptureDiagnostics = {
 	helperExists?: boolean;
 	fileSizeBytes?: number | null;
 	processOutput?: string;
+	unavailableReason?: string;
 	error?: string;
 };
 

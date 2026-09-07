@@ -5,6 +5,7 @@ import {
 	createProcessedMicrophoneConstraints,
 	normalizeBrowserMicrophoneProfile,
 	resolveBrowserCaptureCursorPolicy,
+	describeNativeLinuxCaptureUnavailable,
 	shouldUseNativeWindowsCaptureForSource,
 	stopAndDiscardNativeCapture,
 } from "./useScreenRecorder";
@@ -192,6 +193,26 @@ describe("shouldUseNativeWindowsCaptureForSource", () => {
 
 	it("keeps browser capture for non-desktop sources", () => {
 		expect(shouldUseNativeWindowsCaptureForSource({ id: "browser-tab:abc" })).toBe(false);
+	});
+});
+
+describe("describeNativeLinuxCaptureUnavailable", () => {
+	it("explains Wayland sessions", () => {
+		expect(describeNativeLinuxCaptureUnavailable("wayland-session")).toMatch(
+			/X11 session/,
+		);
+	});
+
+	it("explains missing ffmpeg capabilities", () => {
+		expect(describeNativeLinuxCaptureUnavailable("no-x11grab")).toMatch(/x11grab/);
+		expect(describeNativeLinuxCaptureUnavailable("no-libx264")).toMatch(/H\.264/);
+		expect(describeNativeLinuxCaptureUnavailable("no-ffmpeg-binary")).toMatch(
+			/ffmpeg was not found/,
+		);
+	});
+
+	it("falls back to a generic message for unknown reasons", () => {
+		expect(describeNativeLinuxCaptureUnavailable(undefined)).toMatch(/unavailable/);
 	});
 });
 

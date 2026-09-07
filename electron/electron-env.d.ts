@@ -979,7 +979,17 @@ interface Window {
 		setHasUnsavedChanges: (hasChanges: boolean) => void;
 		onRequestSaveBeforeClose: (callback: () => Promise<boolean>) => () => void;
 		isNativeWindowsCaptureAvailable: () => Promise<{ available: boolean }>;
-		isNativeLinuxCaptureAvailable: () => Promise<{ available: boolean }>;
+		isNativeLinuxCaptureAvailable: () => Promise<{
+			available: boolean;
+			reason?:
+				| "not-linux"
+				| "wayland-session"
+				| "no-x11-display"
+				| "no-ffmpeg-binary"
+				| "no-x11grab"
+				| "no-libx264"
+				| "probe-failed";
+		}>;
 		muxNativeWindowsRecording: (expectedDurationMs?: number) => Promise<{
 			success: boolean;
 			path?: string;
