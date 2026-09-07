@@ -74,7 +74,8 @@ import {
 } from "../recording/mac";
 import {
 	attachLinuxCaptureLifecycle,
-	isNativeLinuxCaptureAvailable,
+	describeLinuxCaptureUnavailableReason,
+	probeNativeLinuxCaptureAvailability,
 	stitchLinuxSegments,
 	waitForLinuxCaptureStart,
 	waitForLinuxCaptureStop,
@@ -748,11 +749,11 @@ export function registerRecordingHandlers(
 
 			// Linux native capture path (ffmpeg x11grab — records without the OS cursor)
 			if (process.platform === "linux") {
-				const linuxCaptureAvailable = await isNativeLinuxCaptureAvailable();
-				if (!linuxCaptureAvailable) {
+				const linuxAvailability = await probeNativeLinuxCaptureAvailability();
+				if (!linuxAvailability.available) {
 					return {
 						success: false,
-						message: "Native Linux capture is not available on this system.",
+						message: describeLinuxCaptureUnavailableReason(linuxAvailability.reason),
 					};
 				}
 
@@ -1793,7 +1794,13 @@ export function registerRecordingHandlers(
 	});
 
 	ipcMain.handle("is-native-linux-capture-available", async () => {
-		return { available: await isNativeLinuxCaptureAvailable() };
+		const availability = await probeNativeLinuxCaptureAvailability();
+		recordNativeCaptureDiagnostics({
+			backend: "linux-x11grab",
+			phase: "availability",
+			unavailableReason: availability.available ? undefined : availability.reason,
+		});
+		return availability;
 	});
 
 	ipcMain.handle("get-last-native-capture-diagnostics", async () => {
