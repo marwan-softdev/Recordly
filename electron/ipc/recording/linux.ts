@@ -29,6 +29,51 @@ export function resetLinuxCaptureCapabilitiesProbe() {
 	ffmpegCapabilitiesProbe = null;
 }
 
+/**
+ * Segment files share encoder settings, so they can be joined losslessly with
+ * the concat demuxer + stream copy (no re-encode).
+ */
+export function buildLinuxConcatListContent(segmentPaths: string[]): string {
+	return segmentPaths
+		.map((segmentPath) => `file '${segmentPath.replace(/'/g, "'\\''")}'`)
+		.join("\n");
+}
+
+export async function stitchLinuxSegments(
+	ffmpegPath: string,
+	segmentPaths: string[],
+	outputPath: string,
+) {
+	if (segmentPaths.length < 2) {
+		throw new Error("Segment stitching requires at least two segments");
+	}
+
+	const listPath = `${outputPath}.concat.txt`;
+	await fs.writeFile(listPath, `${buildLinuxConcatListContent(segmentPaths)}\n`);
+	try {
+		await execFileAsync(
+			ffmpegPath,
+			[
+				"-y",
+				"-hide_banner",
+				"-nostdin",
+				"-f",
+				"concat",
+				"-safe",
+				"0",
+				"-i",
+				listPath,
+				"-c",
+				"copy",
+				outputPath,
+			],
+			{ timeout: 120_000, maxBuffer: 10 * 1024 * 1024 },
+		);
+	} finally {
+		await fs.rm(listPath, { force: true }).catch(() => undefined);
+	}
+}
+
 function probeFfmpegCapabilities(ffmpegPath: string) {
 	if (!ffmpegCapabilitiesProbe) {
 		ffmpegCapabilitiesProbe = (async () => {
