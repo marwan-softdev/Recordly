@@ -225,6 +225,36 @@ export function resolveBrowserCaptureCursorPolicy({
 	};
 }
 
+export type NativeLinuxCaptureUnavailableReason =
+	| "not-linux"
+	| "wayland-session"
+	| "no-x11-display"
+	| "no-ffmpeg-binary"
+	| "no-x11grab"
+	| "no-libx264"
+	| "probe-failed";
+
+export function describeNativeLinuxCaptureUnavailable(
+	reason: NativeLinuxCaptureUnavailableReason | undefined,
+): string {
+	switch (reason) {
+		case "wayland-session":
+			return "Native Linux capture needs an X11 session. Falling back to browser capture.";
+		case "no-x11-display":
+			return "No X11 display found for native Linux capture. Falling back to browser capture.";
+		case "no-ffmpeg-binary":
+			return "ffmpeg was not found, so native Linux capture is unavailable. Falling back to browser capture.";
+		case "no-x11grab":
+			return "This ffmpeg build lacks x11grab support. Falling back to browser capture.";
+		case "no-libx264":
+			return "This ffmpeg build lacks the H.264 encoder needed for native Linux capture. Falling back to browser capture.";
+		case "probe-failed":
+			return "Could not verify native Linux capture support. Falling back to browser capture.";
+		default:
+			return "Native Linux capture is unavailable. Falling back to browser capture.";
+	}
+}
+
 export function shouldUseNativeWindowsCaptureForSource(
 	source: Pick<ProcessedDesktopSource, "id"> | null | undefined,
 ): boolean {
@@ -1204,6 +1234,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		}
 
 		let useNativeLinuxCapture = false;
+		let linuxUnavailableReason: NativeLinuxCaptureUnavailableReason | undefined;
 		if (
 			platform === "linux" &&
 			selectedSource.id?.startsWith("screen:") &&
@@ -1213,14 +1244,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				const nativeLinuxResult =
 					await window.electronAPI.isNativeLinuxCaptureAvailable();
 				useNativeLinuxCapture = nativeLinuxResult.available;
+				if (!nativeLinuxResult.available) {
+					linuxUnavailableReason = nativeLinuxResult.reason;
+				}
 			} catch {
 				useNativeLinuxCapture = false;
 			}
-			if (!useNativeLinuxCapture && !hasShownNativeLinuxFallbackToast.current) {
+			if (
+				!useNativeLinuxCapture &&
+				!hasShownNativeLinuxFallbackToast.current
+			) {
 				hasShownNativeLinuxFallbackToast.current = true;
-				toast.info(
-					"Native Linux capture is unavailable. Falling back to browser capture.",
-				);
+				toast.info(describeNativeLinuxCaptureUnavailable(linuxUnavailableReason));
 			}
 		}
 
