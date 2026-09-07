@@ -47,6 +47,13 @@ export let windowsMicAudioPath: string | null = null;
 export let windowsOrphanedMicAudioPath: string | null = null;
 export let windowsPendingVideoPath: string | null = null;
 
+// ── Linux native capture (ffmpeg x11grab) ─────────────────────────────────────
+export let linuxCaptureProcess: ChildProcessWithoutNullStreams | null = null;
+export let linuxCaptureOutputBuffer = "";
+export let linuxCaptureTargetPath: string | null = null;
+export let linuxNativeCaptureActive = false;
+export let linuxCaptureStopRequested = false;
+
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 export let lastNativeCaptureDiagnostics: NativeCaptureDiagnostics | null = null;
 
@@ -172,6 +179,22 @@ export function setWindowsCaptureStopRequested(v: boolean) {
 export function setWindowsCapturePaused(v: boolean) {
 	windowsCapturePaused = v;
 }
+export function setLinuxCaptureProcess(v: ChildProcessWithoutNullStreams | null) {
+	linuxCaptureProcess = v;
+}
+export function setLinuxCaptureOutputBuffer(v: string) {
+	linuxCaptureOutputBuffer = v;
+}
+export function setLinuxCaptureTargetPath(v: string | null) {
+	linuxCaptureTargetPath = v;
+}
+export function setLinuxNativeCaptureActive(v: boolean) {
+	linuxNativeCaptureActive = v;
+}
+export function setLinuxCaptureStopRequested(v: boolean) {
+	linuxCaptureStopRequested = v;
+}
+
 export function setWindowsSystemAudioPath(v: string | null) {
 	windowsSystemAudioPath = v;
 }

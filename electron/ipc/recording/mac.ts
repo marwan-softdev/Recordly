@@ -237,7 +237,8 @@ export async function finalizeStoredVideo(videoPath: string) {
 	} catch (error) {
 		if (
 			lastNativeCaptureDiagnostics?.backend === "mac-screencapturekit" ||
-			lastNativeCaptureDiagnostics?.backend === "windows-wgc"
+			lastNativeCaptureDiagnostics?.backend === "windows-wgc" ||
+			lastNativeCaptureDiagnostics?.backend === "linux-x11grab"
 		) {
 			recordNativeCaptureDiagnostics({
 				backend: lastNativeCaptureDiagnostics.backend,
@@ -276,7 +277,8 @@ export async function finalizeStoredVideo(videoPath: string) {
 
 	if (
 		lastNativeCaptureDiagnostics?.backend === "mac-screencapturekit" ||
-		lastNativeCaptureDiagnostics?.backend === "windows-wgc"
+		lastNativeCaptureDiagnostics?.backend === "windows-wgc" ||
+		lastNativeCaptureDiagnostics?.backend === "linux-x11grab"
 	) {
 		recordNativeCaptureDiagnostics({
 			backend: lastNativeCaptureDiagnostics.backend,

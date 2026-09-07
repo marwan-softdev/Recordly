@@ -32,6 +32,9 @@ import {
 } from "../cursor/telemetry";
 import { getFfmpegBinaryPath } from "../ffmpeg/binary";
 import {
+	shouldUseNativeLinuxCaptureForSource,
+} from "../linuxCaptureSelection";
+import {
 	ensureNativeCaptureHelperBinary,
 	ensureSwiftHelperBinary,
 	getNativeCaptureHelperBinaryPath,
@@ -69,6 +72,12 @@ import {
 	waitForNativeCaptureStart,
 	waitForNativeCaptureStop,
 } from "../recording/mac";
+import {
+	attachLinuxCaptureLifecycle,
+	isNativeLinuxCaptureAvailable,
+	waitForLinuxCaptureStart,
+	waitForLinuxCaptureStop,
+} from "../recording/linux";
 import { resolveRecordedVideoStoragePath } from "../recording/storagePath";
 import {
 	attachWindowsCaptureLifecycle,
@@ -90,6 +99,10 @@ import {
 	ffmpegCaptureTargetPath,
 	ffmpegScreenRecordingActive,
 	lastNativeCaptureDiagnostics,
+	linuxCaptureOutputBuffer,
+	linuxCaptureProcess,
+	linuxCaptureTargetPath,
+	linuxNativeCaptureActive,
 	nativeCaptureMicrophonePath,
 	nativeCaptureOutputBuffer,
 	nativeCapturePaused,
@@ -108,6 +121,11 @@ import {
 	setFfmpegScreenRecordingActive,
 	setIsCursorCaptureActive,
 	setLastLeftClick,
+	setLinuxCaptureOutputBuffer,
+	setLinuxCaptureProcess,
+	setLinuxCaptureStopRequested,
+	setLinuxCaptureTargetPath,
+	setLinuxNativeCaptureActive,
 	setLinuxCursorScreenPoint,
 	setNativeCaptureMicrophonePath,
 	setNativeCaptureOutputBuffer,
@@ -646,6 +664,128 @@ export function registerRecordingHandlers(
 				}
 			}
 
+			// Linux native capture path (ffmpeg x11grab — records without the OS cursor)
+			if (process.platform === "linux") {
+				const linuxCaptureAvailable = await isNativeLinuxCaptureAvailable();
+				if (!linuxCaptureAvailable) {
+					return {
+						success: false,
+						message: "Native Linux capture is not available on this system.",
+					};
+				}
+
+				if (!shouldUseNativeLinuxCaptureForSource(source)) {
+					return {
+						success: false,
+						message:
+							"Native Linux capture only supports screen sources; falling back to browser capture.",
+					};
+				}
+
+				if (linuxCaptureProcess && !linuxNativeCaptureActive) {
+					try {
+						linuxCaptureProcess.kill();
+					} catch {
+						/* ignore */
+					}
+					setLinuxCaptureProcess(null);
+					setLinuxCaptureTargetPath(null);
+					setLinuxCaptureStopRequested(false);
+				}
+
+				if (linuxCaptureProcess) {
+					return {
+						success: false,
+						message: "A native Linux screen recording is already active.",
+					};
+				}
+
+				let linuxProc: ChildProcessWithoutNullStreams | null = null;
+				try {
+					const ffmpegPath = getFfmpegBinaryPath();
+					const recordingsDir = await getRecordingsDir();
+					const outputPath = path.join(recordingsDir, `recording-${Date.now()}.mp4`);
+					const args = await buildFfmpegCaptureArgs(source, outputPath);
+
+					let captureOutput = "";
+					recordNativeCaptureDiagnostics({
+						backend: "linux-x11grab",
+						phase: "start",
+						sourceId: source?.id ?? null,
+						sourceType: source?.sourceType ?? "unknown",
+						helperPath: ffmpegPath,
+						outputPath,
+					});
+
+					setLinuxCaptureOutputBuffer("");
+					setLinuxCaptureTargetPath(outputPath);
+					setLinuxCaptureStopRequested(false);
+
+					linuxProc = spawn(ffmpegPath, args, {
+						cwd: recordingsDir,
+						stdio: ["pipe", "pipe", "pipe"],
+					});
+					setLinuxCaptureProcess(linuxProc);
+					attachLinuxCaptureLifecycle(linuxProc);
+
+					linuxProc.stdout.on("data", (chunk: Buffer) => {
+						captureOutput += chunk.toString();
+						setLinuxCaptureOutputBuffer(captureOutput);
+					});
+					linuxProc.stderr.on("data", (chunk: Buffer) => {
+						captureOutput += chunk.toString();
+						setLinuxCaptureOutputBuffer(captureOutput);
+					});
+
+					await waitForLinuxCaptureStart(linuxProc);
+					setLinuxNativeCaptureActive(true);
+					setNativeScreenRecordingActive(true);
+					recordNativeCaptureDiagnostics({
+						backend: "linux-x11grab",
+						phase: "start",
+						sourceId: source?.id ?? null,
+						sourceType: source?.sourceType ?? "unknown",
+						helperPath: ffmpegPath,
+						outputPath,
+						processOutput: captureOutput.trim() || undefined,
+					});
+					// Mic capture is handled by the renderer's browser-microphone
+					// sidecar flow (same as the Windows orphaned-mic fallback); system
+					// audio is deferred to a later phase of the Linux backend.
+					return {
+						success: true,
+						microphoneFallbackRequired: Boolean(options?.capturesMicrophone),
+					};
+				} catch (error) {
+					recordNativeCaptureDiagnostics({
+						backend: "linux-x11grab",
+						phase: "start",
+						sourceId: source?.id ?? null,
+						sourceType: source?.sourceType ?? "unknown",
+						helperPath: linuxCaptureTargetPath ? getFfmpegBinaryPath() : null,
+						outputPath: linuxCaptureTargetPath,
+						processOutput: linuxCaptureOutputBuffer.trim() || undefined,
+						error: String(error),
+					});
+					console.error("Failed to start native Linux capture:", error);
+					try {
+						if (linuxProc) linuxProc.kill();
+					} catch {
+						/* ignore */
+					}
+					setLinuxNativeCaptureActive(false);
+					setNativeScreenRecordingActive(false);
+					setLinuxCaptureProcess(null);
+					setLinuxCaptureTargetPath(null);
+					setLinuxCaptureStopRequested(false);
+					return {
+						success: false,
+						message: "Failed to start native Linux capture",
+						error: String(error),
+					};
+				}
+			}
+
 			if (process.platform !== "darwin") {
 				return {
 					success: false,
@@ -1107,6 +1247,73 @@ export function registerRecordingHandlers(
 				}
 			}
 
+			// Linux native capture stop path
+			if (process.platform === "linux" && linuxNativeCaptureActive) {
+				try {
+					if (!linuxCaptureProcess) {
+						throw new Error("Native Linux capture process is not running");
+					}
+
+					const proc = linuxCaptureProcess;
+					const finalVideoPath = linuxCaptureTargetPath;
+					if (!finalVideoPath) {
+						throw new Error("Native Linux capture output path is missing");
+					}
+
+					setLinuxCaptureStopRequested(true);
+					proc.stdin.write("q\n");
+					await waitForLinuxCaptureStop(proc, finalVideoPath);
+
+					setLinuxCaptureProcess(null);
+					setLinuxNativeCaptureActive(false);
+					setNativeScreenRecordingActive(false);
+					setLinuxCaptureTargetPath(null);
+					setLinuxCaptureStopRequested(false);
+
+					recordNativeCaptureDiagnostics({
+						backend: "linux-x11grab",
+						phase: "stop",
+						outputPath: finalVideoPath,
+						processOutput: linuxCaptureOutputBuffer.trim() || undefined,
+					});
+
+					return await finalizeStoredVideo(finalVideoPath);
+				} catch (error) {
+					console.error("Failed to stop native Linux capture:", error);
+					const fallbackPath = linuxCaptureTargetPath;
+					setLinuxNativeCaptureActive(false);
+					setNativeScreenRecordingActive(false);
+					setLinuxCaptureProcess(null);
+					setLinuxCaptureTargetPath(null);
+					setLinuxCaptureStopRequested(false);
+
+					recordNativeCaptureDiagnostics({
+						backend: "linux-x11grab",
+						phase: "stop",
+						outputPath: fallbackPath,
+						processOutput: linuxCaptureOutputBuffer.trim() || undefined,
+						fileSizeBytes: await getFileSizeIfPresent(fallbackPath),
+						error: String(error),
+					});
+
+					// ffmpeg writes a playable file incrementally; if the output exists
+					// despite the unclean stop, finalize whatever was recorded.
+					if (fallbackPath && (await pathExists(fallbackPath))) {
+						try {
+							return await finalizeStoredVideo(fallbackPath);
+						} catch {
+							// File is absent or failed validation.
+						}
+					}
+
+					return {
+						success: false,
+						message: "Failed to stop native Linux capture",
+						error: String(error),
+					};
+				}
+			}
+
 			if (process.platform !== "darwin") {
 				return {
 					success: false,
@@ -1300,6 +1507,18 @@ export function registerRecordingHandlers(
 			}
 		}
 
+		if (process.platform === "linux") {
+			if (!linuxNativeCaptureActive) {
+				return { success: false, message: "No native Linux screen recording is active." };
+			}
+			// Segment-based pause/resume lands in the next milestone of the Linux
+			// backend; until then the renderer falls back to the pre-start countdown.
+			return {
+				success: false,
+				message: "Pausing native Linux recordings is not supported yet.",
+			};
+		}
+
 		if (process.platform !== "darwin") {
 			return {
 				success: false,
@@ -1356,6 +1575,16 @@ export function registerRecordingHandlers(
 			}
 		}
 
+		if (process.platform === "linux") {
+			if (!linuxNativeCaptureActive) {
+				return { success: false, message: "No native Linux screen recording is active." };
+			}
+			return {
+				success: false,
+				message: "Resuming native Linux recordings is not supported yet.",
+			};
+		}
+
 		if (process.platform !== "darwin") {
 			return {
 				success: false,
@@ -1400,6 +1629,10 @@ export function registerRecordingHandlers(
 
 	ipcMain.handle("is-native-windows-capture-available", async () => {
 		return { available: await isNativeWindowsCaptureAvailable() };
+	});
+
+	ipcMain.handle("is-native-linux-capture-available", async () => {
+		return { available: await isNativeLinuxCaptureAvailable() };
 	});
 
 	ipcMain.handle("get-last-native-capture-diagnostics", async () => {
