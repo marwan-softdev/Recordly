@@ -77,6 +77,7 @@ import {
 import {
 	attachLinuxCaptureLifecycle,
 	isNativeLinuxCaptureAvailable,
+	stitchLinuxSegments,
 	waitForLinuxCaptureStart,
 	waitForLinuxCaptureStop,
 } from "../recording/linux";
@@ -102,7 +103,10 @@ import {
 	ffmpegScreenRecordingActive,
 	lastNativeCaptureDiagnostics,
 	linuxCaptureOutputBuffer,
+	linuxCapturePaused,
 	linuxCaptureProcess,
+	linuxCaptureSegmentPath,
+	linuxCaptureSegments,
 	linuxCaptureTargetPath,
 	linuxNativeCaptureActive,
 	nativeCaptureMicrophonePath,
@@ -124,7 +128,10 @@ import {
 	setIsCursorCaptureActive,
 	setLastLeftClick,
 	setLinuxCaptureOutputBuffer,
+	setLinuxCapturePaused,
 	setLinuxCaptureProcess,
+	setLinuxCaptureSegmentPath,
+	setLinuxCaptureSegments,
 	setLinuxCaptureStopRequested,
 	setLinuxCaptureTargetPath,
 	setLinuxNativeCaptureActive,
@@ -411,6 +418,81 @@ async function resolveExistingPath(...candidates: Array<string | null | undefine
 	}
 
 	return null;
+}
+
+async function startLinuxCaptureSegment(
+	source: SelectedSource,
+	segmentPath: string,
+): Promise<ChildProcessWithoutNullStreams> {
+	const ffmpegPath = getFfmpegBinaryPath();
+	const args = await buildFfmpegCaptureArgs(source, segmentPath);
+	const recordingsDir = await getRecordingsDir();
+
+	let captureOutput = "";
+	setLinuxCaptureOutputBuffer("");
+	setLinuxCaptureSegmentPath(segmentPath);
+	const proc = spawn(ffmpegPath, args, {
+		cwd: recordingsDir,
+		stdio: ["pipe", "pipe", "pipe"],
+	});
+	setLinuxCaptureProcess(proc);
+	attachLinuxCaptureLifecycle(proc);
+
+	proc.stdout.on("data", (chunk: Buffer) => {
+		captureOutput += chunk.toString();
+		setLinuxCaptureOutputBuffer(captureOutput);
+	});
+	proc.stderr.on("data", (chunk: Buffer) => {
+		captureOutput += chunk.toString();
+		setLinuxCaptureOutputBuffer(captureOutput);
+	});
+
+	await waitForLinuxCaptureStart(proc);
+	return proc;
+}
+
+async function stopLinuxCaptureSegment() {
+	const proc = linuxCaptureProcess;
+	const segmentPath = linuxCaptureSegmentPath;
+	if (!proc || !segmentPath) {
+		throw new Error("Native Linux capture process is not running");
+	}
+
+	setLinuxCaptureStopRequested(true);
+	proc.stdin.write("q\n");
+	const stoppedPath = await waitForLinuxCaptureStop(proc, segmentPath);
+	setLinuxCaptureProcess(null);
+	setLinuxCaptureSegmentPath(null);
+	setLinuxCaptureStopRequested(false);
+	setLinuxCaptureSegments([...linuxCaptureSegments, stoppedPath]);
+	return stoppedPath;
+}
+
+/**
+ * Joins the recorded segments into the final video. Segments share encoder
+ * settings, so this is a lossless stream copy (instant, no re-encode).
+ */
+async function finalizeLinuxCaptureRecording(finalVideoPath: string) {
+	const segments = linuxCaptureSegments;
+	if (segments.length === 0) {
+		throw new Error("No Linux capture segments were recorded");
+	}
+
+	if (segments.length === 1) {
+		if (segments[0] !== finalVideoPath) {
+			await moveFileWithOverwrite(segments[0], finalVideoPath);
+		}
+	} else {
+		await stitchLinuxSegments(getFfmpegBinaryPath(), segments, finalVideoPath);
+	}
+
+	await Promise.all(
+		segments
+			.filter((segmentPath) => segmentPath !== finalVideoPath)
+			.map((segmentPath) => fs.rm(segmentPath, { force: true }).catch(() => undefined)),
+	);
+	setLinuxCaptureSegments([]);
+	return finalVideoPath;
 }
 
 export function registerRecordingHandlers(
@@ -702,51 +784,38 @@ export function registerRecordingHandlers(
 					setLinuxCaptureStopRequested(false);
 				}
 
-				if (linuxCaptureProcess) {
+				if (linuxCaptureProcess || linuxNativeCaptureActive) {
 					return {
 						success: false,
 						message: "A native Linux screen recording is already active.",
 					};
 				}
 
-				let linuxProc: ChildProcessWithoutNullStreams | null = null;
 				try {
-					const ffmpegPath = getFfmpegBinaryPath();
 					const recordingsDir = await getRecordingsDir();
-					const outputPath = path.join(recordingsDir, `recording-${Date.now()}.mp4`);
-					const args = await buildFfmpegCaptureArgs(source, outputPath);
+					const sessionTimestamp = Date.now();
+					const finalVideoPath = path.join(
+						recordingsDir,
+						`recording-${sessionTimestamp}.mp4`,
+					);
+					const firstSegmentPath = path.join(
+						recordingsDir,
+						`recording-${sessionTimestamp}.segment-0.mp4`,
+					);
 
-					let captureOutput = "";
 					recordNativeCaptureDiagnostics({
 						backend: "linux-x11grab",
 						phase: "start",
 						sourceId: source?.id ?? null,
 						sourceType: source?.sourceType ?? "unknown",
-						helperPath: ffmpegPath,
-						outputPath,
+						outputPath: finalVideoPath,
 					});
 
-					setLinuxCaptureOutputBuffer("");
-					setLinuxCaptureTargetPath(outputPath);
+					setLinuxCaptureTargetPath(finalVideoPath);
+					setLinuxCaptureSegments([]);
+					setLinuxCapturePaused(false);
 					setLinuxCaptureStopRequested(false);
-
-					linuxProc = spawn(ffmpegPath, args, {
-						cwd: recordingsDir,
-						stdio: ["pipe", "pipe", "pipe"],
-					});
-					setLinuxCaptureProcess(linuxProc);
-					attachLinuxCaptureLifecycle(linuxProc);
-
-					linuxProc.stdout.on("data", (chunk: Buffer) => {
-						captureOutput += chunk.toString();
-						setLinuxCaptureOutputBuffer(captureOutput);
-					});
-					linuxProc.stderr.on("data", (chunk: Buffer) => {
-						captureOutput += chunk.toString();
-						setLinuxCaptureOutputBuffer(captureOutput);
-					});
-
-					await waitForLinuxCaptureStart(linuxProc);
+					await startLinuxCaptureSegment(source, firstSegmentPath);
 					setLinuxNativeCaptureActive(true);
 					setNativeScreenRecordingActive(true);
 					recordNativeCaptureDiagnostics({
@@ -754,9 +823,8 @@ export function registerRecordingHandlers(
 						phase: "start",
 						sourceId: source?.id ?? null,
 						sourceType: source?.sourceType ?? "unknown",
-						helperPath: ffmpegPath,
-						outputPath,
-						processOutput: captureOutput.trim() || undefined,
+						outputPath: finalVideoPath,
+						processOutput: linuxCaptureOutputBuffer.trim() || undefined,
 					});
 					// Mic capture is handled by the renderer's browser-microphone
 					// sidecar flow (same as the Windows orphaned-mic fallback); system
@@ -771,22 +839,31 @@ export function registerRecordingHandlers(
 						phase: "start",
 						sourceId: source?.id ?? null,
 						sourceType: source?.sourceType ?? "unknown",
-						helperPath: linuxCaptureTargetPath ? getFfmpegBinaryPath() : null,
 						outputPath: linuxCaptureTargetPath,
 						processOutput: linuxCaptureOutputBuffer.trim() || undefined,
 						error: String(error),
 					});
 					console.error("Failed to start native Linux capture:", error);
+					// TypeScript sees the earlier "already active" guard as proving this
+					// is null, but startLinuxCaptureSegment may have spawned since.
+					const startedProcess = linuxCaptureProcess as ChildProcessWithoutNullStreams | null;
 					try {
-						if (linuxProc) linuxProc.kill();
+						startedProcess?.kill();
 					} catch {
 						/* ignore */
 					}
+					const failedSegmentPath = linuxCaptureSegmentPath;
 					setLinuxNativeCaptureActive(false);
 					setNativeScreenRecordingActive(false);
 					setLinuxCaptureProcess(null);
+					setLinuxCaptureSegmentPath(null);
+					setLinuxCaptureSegments([]);
 					setLinuxCaptureTargetPath(null);
 					setLinuxCaptureStopRequested(false);
+					setLinuxCapturePaused(false);
+					if (failedSegmentPath) {
+						await fs.rm(failedSegmentPath, { force: true }).catch(() => undefined);
+					}
 					return {
 						success: false,
 						message: "Failed to start native Linux capture",
@@ -1276,60 +1353,85 @@ export function registerRecordingHandlers(
 
 			// Linux native capture stop path
 			if (process.platform === "linux" && linuxNativeCaptureActive) {
+				const finalVideoPath = linuxCaptureTargetPath;
 				try {
-					if (!linuxCaptureProcess) {
-						throw new Error("Native Linux capture process is not running");
-					}
-
-					const proc = linuxCaptureProcess;
-					const finalVideoPath = linuxCaptureTargetPath;
 					if (!finalVideoPath) {
 						throw new Error("Native Linux capture output path is missing");
 					}
 
-					setLinuxCaptureStopRequested(true);
-					proc.stdin.write("q\n");
-					await waitForLinuxCaptureStop(proc, finalVideoPath);
+					if (linuxCaptureProcess) {
+						await stopLinuxCaptureSegment();
+					}
+					if (linuxCapturePaused && linuxCaptureSegmentPath) {
+						// Stopped while paused with a segment still open (pause raced the
+						// stop); make sure the open segment file lands in the list.
+						setLinuxCaptureSegments([...linuxCaptureSegments, linuxCaptureSegmentPath]);
+						setLinuxCaptureSegmentPath(null);
+					}
 
 					setLinuxCaptureProcess(null);
 					setLinuxNativeCaptureActive(false);
 					setNativeScreenRecordingActive(false);
 					setLinuxCaptureTargetPath(null);
 					setLinuxCaptureStopRequested(false);
+					setLinuxCapturePaused(false);
+
+					const stitchedPath = await finalizeLinuxCaptureRecording(finalVideoPath);
+
+					recordNativeCaptureDiagnostics({
+						backend: "linux-x11grab",
+						phase: "stop",
+						outputPath: stitchedPath,
+						processOutput: linuxCaptureOutputBuffer.trim() || undefined,
+					});
+
+					return await finalizeStoredVideo(stitchedPath);
+				} catch (error) {
+					console.error("Failed to stop native Linux capture:", error);
+					const segments = linuxCaptureSegments;
+					const openSegmentPath = linuxCaptureSegmentPath;
+					setLinuxNativeCaptureActive(false);
+					setNativeScreenRecordingActive(false);
+					setLinuxCaptureProcess(null);
+					setLinuxCaptureSegmentPath(null);
+					setLinuxCaptureTargetPath(null);
+					setLinuxCaptureStopRequested(false);
+					setLinuxCapturePaused(false);
 
 					recordNativeCaptureDiagnostics({
 						backend: "linux-x11grab",
 						phase: "stop",
 						outputPath: finalVideoPath,
 						processOutput: linuxCaptureOutputBuffer.trim() || undefined,
-					});
-
-					return await finalizeStoredVideo(finalVideoPath);
-				} catch (error) {
-					console.error("Failed to stop native Linux capture:", error);
-					const fallbackPath = linuxCaptureTargetPath;
-					setLinuxNativeCaptureActive(false);
-					setNativeScreenRecordingActive(false);
-					setLinuxCaptureProcess(null);
-					setLinuxCaptureTargetPath(null);
-					setLinuxCaptureStopRequested(false);
-
-					recordNativeCaptureDiagnostics({
-						backend: "linux-x11grab",
-						phase: "stop",
-						outputPath: fallbackPath,
-						processOutput: linuxCaptureOutputBuffer.trim() || undefined,
-						fileSizeBytes: await getFileSizeIfPresent(fallbackPath),
+						fileSizeBytes: await getFileSizeIfPresent(finalVideoPath),
 						error: String(error),
 					});
 
-					// ffmpeg writes a playable file incrementally; if the output exists
-					// despite the unclean stop, finalize whatever was recorded.
-					if (fallbackPath && (await pathExists(fallbackPath))) {
+					// Best-effort recovery: an unclean ffmpeg exit still leaves usable
+					// segment files, and the final mp4 may exist from an earlier stage.
+					if (finalVideoPath && segments.length > 0) {
 						try {
-							return await finalizeStoredVideo(fallbackPath);
+							const recoveredPath = await finalizeLinuxCaptureRecording(finalVideoPath);
+							return await finalizeStoredVideo(recoveredPath);
+						} catch (recoveryError) {
+							console.warn(
+								"Failed to recover Linux capture segments after stop failure:",
+								recoveryError,
+							);
+						}
+					}
+					if (finalVideoPath && (await pathExists(finalVideoPath))) {
+						try {
+							return await finalizeStoredVideo(finalVideoPath);
 						} catch {
-							// File is absent or failed validation.
+							// File failed validation.
+						}
+					}
+					if (openSegmentPath && (await pathExists(openSegmentPath))) {
+						try {
+							return await finalizeStoredVideo(openSegmentPath);
+						} catch {
+							// File failed validation.
 						}
 					}
 
@@ -1538,12 +1640,28 @@ export function registerRecordingHandlers(
 			if (!linuxNativeCaptureActive) {
 				return { success: false, message: "No native Linux screen recording is active." };
 			}
-			// Segment-based pause/resume lands in the next milestone of the Linux
-			// backend; until then the renderer falls back to the pre-start countdown.
-			return {
-				success: false,
-				message: "Pausing native Linux recordings is not supported yet.",
-			};
+
+			if (linuxCapturePaused) {
+				return { success: true };
+			}
+
+			try {
+				await stopLinuxCaptureSegment();
+				setLinuxCapturePaused(true);
+				recordNativeCaptureDiagnostics({
+					backend: "linux-x11grab",
+					phase: "stop",
+					outputPath: linuxCaptureTargetPath,
+					processOutput: linuxCaptureOutputBuffer.trim() || undefined,
+				});
+				return { success: true };
+			} catch (error) {
+				return {
+					success: false,
+					message: "Failed to pause native Linux capture",
+					error: String(error),
+				};
+			}
 		}
 
 		if (process.platform !== "darwin") {
@@ -1606,10 +1724,53 @@ export function registerRecordingHandlers(
 			if (!linuxNativeCaptureActive) {
 				return { success: false, message: "No native Linux screen recording is active." };
 			}
-			return {
-				success: false,
-				message: "Resuming native Linux recordings is not supported yet.",
-			};
+
+			if (!linuxCapturePaused) {
+				return { success: true };
+			}
+
+			const source = selectedSource;
+			if (!source || !shouldUseNativeLinuxCaptureForSource(source)) {
+				return {
+					success: false,
+					message: "Native Linux capture source is no longer available.",
+				};
+			}
+
+			try {
+				const finalVideoPath = linuxCaptureTargetPath;
+				if (!finalVideoPath) {
+					return {
+						success: false,
+						message: "Native Linux capture output path is missing.",
+					};
+				}
+				const nextSegmentPath = `${finalVideoPath.replace(
+					/\.[^.]+$/,
+					"",
+				)}.segment-${linuxCaptureSegments.length}.mp4`;
+				await startLinuxCaptureSegment(source, nextSegmentPath);
+				setLinuxCapturePaused(false);
+				return { success: true };
+			} catch (error) {
+				// Resume failed: clean up the half-started segment but keep the
+				// session alive so Stop still finalizes what was recorded before
+				// the pause.
+				console.error("Failed to resume native Linux capture:", error);
+				try {
+					linuxCaptureProcess?.kill();
+				} catch {
+					/* ignore */
+				}
+				setLinuxCaptureProcess(null);
+				setLinuxCaptureSegmentPath(null);
+				setLinuxCapturePaused(false);
+				return {
+					success: false,
+					message: "Failed to resume native Linux capture",
+					error: String(error),
+				};
+			}
 		}
 
 		if (process.platform !== "darwin") {

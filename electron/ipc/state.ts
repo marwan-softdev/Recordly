@@ -53,6 +53,9 @@ export let linuxCaptureOutputBuffer = "";
 export let linuxCaptureTargetPath: string | null = null;
 export let linuxNativeCaptureActive = false;
 export let linuxCaptureStopRequested = false;
+export let linuxCapturePaused = false;
+export let linuxCaptureSegmentPath: string | null = null;
+export let linuxCaptureSegments: string[] = [];
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 export let lastNativeCaptureDiagnostics: NativeCaptureDiagnostics | null = null;
@@ -193,6 +196,15 @@ export function setLinuxNativeCaptureActive(v: boolean) {
 }
 export function setLinuxCaptureStopRequested(v: boolean) {
 	linuxCaptureStopRequested = v;
+}
+export function setLinuxCapturePaused(v: boolean) {
+	linuxCapturePaused = v;
+}
+export function setLinuxCaptureSegmentPath(v: string | null) {
+	linuxCaptureSegmentPath = v;
+}
+export function setLinuxCaptureSegments(v: string[]) {
+	linuxCaptureSegments = v;
 }
 
 export function setWindowsSystemAudioPath(v: string | null) {

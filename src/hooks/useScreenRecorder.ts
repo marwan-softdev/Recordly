@@ -1738,10 +1738,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			} = preparedStart;
 			const useNativeCapture =
 				useNativeMacScreenCapture || useNativeWindowsCapture || useNativeLinuxCapture;
-			// Linux native capture cannot pause yet, so the countdown must run
-			// before the capture starts instead of the warm-start dance.
-			const shouldWarmStartNativeCapture =
-				useNativeCapture && countdownDelay > 0 && !useNativeLinuxCapture;
+			const shouldWarmStartNativeCapture = useNativeCapture && countdownDelay > 0;
 			if (countdownDelay > 0 && !shouldWarmStartNativeCapture) {
 				setCountdownActive(true);
 				try {
