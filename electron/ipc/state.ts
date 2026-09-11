@@ -1,4 +1,4 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
 	CursorInteractionType,
 	CursorTelemetryPoint,
@@ -56,6 +56,10 @@ export let linuxCaptureStopRequested = false;
 export let linuxCapturePaused = false;
 export let linuxCaptureSegmentPath: string | null = null;
 export let linuxCaptureSegments: string[] = [];
+export let linuxSystemAudioProcess: ChildProcess | null = null;
+export let linuxSystemAudioSourceName: string | null = null;
+export let linuxSystemAudioSegmentPath: string | null = null;
+export let linuxSystemAudioSegments: string[] = [];
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 export let lastNativeCaptureDiagnostics: NativeCaptureDiagnostics | null = null;
@@ -205,6 +209,18 @@ export function setLinuxCaptureSegmentPath(v: string | null) {
 }
 export function setLinuxCaptureSegments(v: string[]) {
 	linuxCaptureSegments = v;
+}
+export function setLinuxSystemAudioProcess(v: ChildProcess | null) {
+	linuxSystemAudioProcess = v;
+}
+export function setLinuxSystemAudioSourceName(v: string | null) {
+	linuxSystemAudioSourceName = v;
+}
+export function setLinuxSystemAudioSegmentPath(v: string | null) {
+	linuxSystemAudioSegmentPath = v;
+}
+export function setLinuxSystemAudioSegments(v: string[]) {
+	linuxSystemAudioSegments = v;
 }
 
 export function setWindowsSystemAudioPath(v: string | null) {
