@@ -1849,6 +1849,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (nativeResult.success) {
 					nativeScreenRecording.current = true;
 					nativeWindowsRecording.current = useNativeWindowsCapture;
+					if (nativeResult.systemAudioFallbackRequired && systemAudioEnabled) {
+						toast.warning(
+							"System audio capture is not available on this system. Recording will continue without system audio.",
+							{ duration: 8000 },
+						);
+					}
 					if (shouldWarmStartNativeCapture) {
 						nativeWarmStartActive.current = true;
 						const pauseResult = await window.electronAPI.pauseNativeScreenRecording();
