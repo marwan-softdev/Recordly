@@ -255,6 +255,23 @@ export function describeNativeLinuxCaptureUnavailable(
 	}
 }
 
+/**
+ * Anchors the video timeline's t=0 to the moment capture actually began.
+ * Linux native capture reports the spawn instant from the main process; a
+ * renderer-side Date.now() taken after the start IPC returns runs ~1s late,
+ * which used to push the cursor/click overlay ahead of the video.
+ */
+export function resolveVideoStartEpochMs(
+	startedAtMs: unknown,
+	fallbackMs: number,
+): number {
+	return typeof startedAtMs === "number" &&
+		Number.isFinite(startedAtMs) &&
+		startedAtMs > 0
+		? Math.min(Math.round(startedAtMs), fallbackMs)
+		: fallbackMs;
+}
+
 export function shouldUseNativeWindowsCaptureForSource(
 	source: Pick<ProcessedDesktopSource, "id"> | null | undefined,
 ): boolean {
@@ -1803,11 +1820,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						capturesMicrophone: microphoneEnabled,
 						microphoneDeviceId,
 						microphoneLabel: micLabel,
+						// Linux native capture records a throwaway pre-countdown
+						// segment that is dropped at stitch time.
+						warmStart: shouldWarmStartNativeCapture,
 					},
 				);
 				if (nativeResult.success) {
-					// Native capture began inside the call above.
-					videoStartedAtMs = Date.now();
+					// Native capture began inside the call above; prefer the main
+					// process's spawn-time epoch over this later renderer instant.
+					videoStartedAtMs = resolveVideoStartEpochMs(
+						nativeResult.startedAtMs,
+						Date.now(),
+					);
 				}
 				if (nativeResult.success && startWasCancelled()) {
 					nativeScreenRecording.current = true;
@@ -1851,8 +1875,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					nativeWindowsRecording.current = useNativeWindowsCapture;
 					if (nativeResult.systemAudioFallbackRequired && systemAudioEnabled) {
 						toast.warning(
-							"System audio capture is not available on this system. Recording will continue without system audio.",
-							{ duration: 8000 },
+							nativeResult.systemAudioFallbackReason === "no-pulse-device"
+								? "To record system audio on Linux, install ffmpeg (e.g. sudo apt install ffmpeg), then try again. Recording will continue without system audio."
+								: "System audio capture is not available on this system. Recording will continue without system audio.",
+							{ duration: 10000 },
 						);
 					}
 					if (shouldWarmStartNativeCapture) {
@@ -1901,8 +1927,14 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							);
 						}
 						nativeWarmStartActive.current = false;
-						// Frames only begin (again) after the countdown resume.
-						videoStartedAtMs = Date.now();
+						// The pre-countdown segment is dropped at stitch time, so the
+						// saved video's first frame is the resumed segment's start;
+						// anchor the cursor epoch to that exact instant when the
+						// backend reports it.
+						videoStartedAtMs = resolveVideoStartEpochMs(
+							resumeResult.startedAtMs,
+							Date.now(),
+						);
 					}
 					if (startWasCancelled()) {
 						return;
@@ -2406,6 +2438,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					return;
 				}
 
+				// Linux native capture keeps recording until its clean stop
+				// completes; it reports that instant so the cursor timeline
+				// freezes exactly where the video freezes.
+				const cursorBoundaryMs =
+					typeof result.pausedAtMs === "number" &&
+					Number.isFinite(result.pausedAtMs) &&
+					result.pausedAtMs > 0
+						? Math.round(result.pausedAtMs)
+						: boundaryMs;
+
 				if (webcamRecorder.current?.state === "recording") {
 					webcamRecorder.current.pause();
 				}
@@ -2413,7 +2455,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				markRecordingPaused(boundaryMs);
 				setPaused(true);
 				try {
-					await window.electronAPI.pauseCursorCapture(boundaryMs);
+					await window.electronAPI.pauseCursorCapture(cursorBoundaryMs);
 				} catch (error) {
 					console.warn("Failed to pause cursor capture:", error);
 				}
@@ -2459,7 +2501,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				markRecordingResumed(boundaryMs);
 				setPaused(false);
 				try {
-					await window.electronAPI.resumeCursorCapture(boundaryMs);
+					// Linux native capture reports the resumed segment's real first
+					// frame time; anchor the cursor timeline there instead of the
+					// later renderer instant.
+					const resumedAtMs =
+						typeof result.startedAtMs === "number" &&
+						Number.isFinite(result.startedAtMs) &&
+						result.startedAtMs > 0
+							? Math.round(result.startedAtMs)
+							: boundaryMs;
+					await window.electronAPI.resumeCursorCapture(resumedAtMs);
 				} catch (error) {
 					console.warn("Failed to resume cursor capture:", error);
 				}

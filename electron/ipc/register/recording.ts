@@ -78,14 +78,17 @@ import {
 	attachLinuxCaptureLifecycle,
 	describeLinuxCaptureUnavailableReason,
 	probeNativeLinuxCaptureAvailability,
+	selectFinalizableLinuxSegments,
 	stitchLinuxSegments,
 	waitForLinuxCaptureStart,
 	waitForLinuxCaptureStop,
 } from "../recording/linux";
 import {
+	type LinuxSystemAudioUnavailableReason,
 	getLinuxSystemAudioCapture,
-	startLinuxSystemAudioSegment,
+	spawnLinuxSystemAudioSegment,
 	stopLinuxSystemAudioSegment,
+	waitForLinuxSystemAudioSegmentStart,
 } from "../recording/linuxSystemAudio";
 import { resolveRecordedVideoStoragePath } from "../recording/storagePath";
 import {
@@ -108,6 +111,7 @@ import {
 	ffmpegCaptureTargetPath,
 	ffmpegScreenRecordingActive,
 	lastNativeCaptureDiagnostics,
+	linuxCaptureDiscardFirstSegment,
 	linuxCaptureOutputBuffer,
 	linuxCapturePaused,
 	linuxCaptureProcess,
@@ -116,6 +120,7 @@ import {
 	linuxCaptureTargetPath,
 	linuxNativeCaptureActive,
 	linuxSystemAudioProcess,
+	linuxSystemAudioFfmpegPath,
 	linuxSystemAudioSegmentPath,
 	linuxSystemAudioSegments,
 	linuxSystemAudioSourceName,
@@ -137,6 +142,7 @@ import {
 	setFfmpegScreenRecordingActive,
 	setIsCursorCaptureActive,
 	setLastLeftClick,
+	setLinuxCaptureDiscardFirstSegment,
 	setLinuxCaptureOutputBuffer,
 	setLinuxCapturePaused,
 	setLinuxCaptureProcess,
@@ -147,6 +153,7 @@ import {
 	setLinuxNativeCaptureActive,
 	setLinuxCursorScreenPoint,
 	setLinuxSystemAudioProcess,
+	setLinuxSystemAudioFfmpegPath,
 	setLinuxSystemAudioSegmentPath,
 	setLinuxSystemAudioSegments,
 	setLinuxSystemAudioSourceName,
@@ -437,7 +444,7 @@ async function resolveExistingPath(...candidates: Array<string | null | undefine
 async function startLinuxCaptureSegment(
 	source: SelectedSource,
 	segmentPath: string,
-): Promise<ChildProcessWithoutNullStreams> {
+): Promise<{ proc: ChildProcessWithoutNullStreams; startedAtMs: number }> {
 	const ffmpegPath = getFfmpegBinaryPath();
 	const args = await buildFfmpegCaptureArgs(source, segmentPath);
 	const recordingsDir = await getRecordingsDir();
@@ -449,6 +456,10 @@ async function startLinuxCaptureSegment(
 		cwd: recordingsDir,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
+	// x11grab starts grabbing frames within ~100ms of spawn, so this instant —
+	// not the post-readiness-wait moment — is the video timeline's t=0. The
+	// renderer anchors cursor telemetry to it via the start/resume result.
+	const startedAtMs = Date.now();
 	setLinuxCaptureProcess(proc);
 	attachLinuxCaptureLifecycle(proc);
 
@@ -461,34 +472,42 @@ async function startLinuxCaptureSegment(
 		setLinuxCaptureOutputBuffer(captureOutput);
 	});
 
-	await waitForLinuxCaptureStart(proc);
-
-	// System audio records a parallel segment per video segment so pause
-	// boundaries cut both streams at the same wall-clock moments. Failure to
-	// start audio never fails the recording — we just continue video-only.
+	// System audio records a parallel segment per video segment. Spawn it
+	// immediately (not after the video readiness wait) so its t=0 matches the
+	// video's instead of lagging ~1s behind; register the process synchronously
+	// so an instant pause can never miss it. Audio failure never fails the
+	// recording — we just continue video-only.
 	const audioSourceName = linuxSystemAudioSourceName;
 	if (audioSourceName) {
 		const audioSegmentPath = `${segmentPath.replace(/\.[^.]+$/, "")}.system.wav`;
-		try {
-			const audioProc = await startLinuxSystemAudioSegment(
-				audioSourceName,
-				audioSegmentPath,
-			);
-			audioProc.once("close", () => {
-				if (linuxSystemAudioProcess === audioProc) {
-					setLinuxSystemAudioProcess(null);
-				}
-			});
-			setLinuxSystemAudioProcess(audioProc);
-			setLinuxSystemAudioSegmentPath(audioSegmentPath);
-		} catch (error) {
+		const audioProc = spawnLinuxSystemAudioSegment(
+			linuxSystemAudioFfmpegPath ?? getFfmpegBinaryPath(),
+			audioSourceName,
+			audioSegmentPath,
+		);
+		audioProc.once("close", () => {
+			if (linuxSystemAudioProcess === audioProc) {
+				setLinuxSystemAudioProcess(null);
+			}
+		});
+		setLinuxSystemAudioProcess(audioProc);
+		setLinuxSystemAudioSegmentPath(audioSegmentPath);
+		waitForLinuxSystemAudioSegmentStart(audioProc).catch((error) => {
 			console.warn("Failed to start native Linux system audio segment:", error);
-			setLinuxSystemAudioProcess(null);
-			setLinuxSystemAudioSegmentPath(null);
-		}
+			if (linuxSystemAudioProcess === audioProc) {
+				setLinuxSystemAudioProcess(null);
+				setLinuxSystemAudioSegmentPath(null);
+			}
+			try {
+				audioProc.kill();
+			} catch {
+				/* already gone */
+			}
+		});
 	}
 
-	return proc;
+	await waitForLinuxCaptureStart(proc);
+	return { proc, startedAtMs };
 }
 
 async function stopLinuxCaptureSegment() {
@@ -533,16 +552,32 @@ function systemAudioSidecarPathFor(finalVideoPath: string) {
 }
 
 /**
- * Joins the recorded video segments into the final video, and any system-audio
+ * Joins the recorded segments into the final video, and any system-audio
  * segments into the `.system.wav` companion sidecar the editor already reads.
- * Segments share encoder settings, so joining is a lossless stream copy.
+ * Countdown warm starts flag their pre-countdown segment as throwaway; it is
+ * deleted here so the video begins when the countdown ends. Segments share
+ * encoder settings, so joining is a lossless stream copy (no re-encode).
  */
 async function finalizeLinuxCaptureRecording(finalVideoPath: string) {
-	const segments = linuxCaptureSegments;
-	if (segments.length === 0) {
-		throw new Error("No Linux capture segments were recorded");
+	const discardFirst = linuxCaptureDiscardFirstSegment;
+	const { keep, dropped } = selectFinalizableLinuxSegments(
+		linuxCaptureSegments,
+		discardFirst,
+	);
+	setLinuxCaptureDiscardFirstSegment(false);
+	setLinuxCaptureSegments(keep);
+	await Promise.all(
+		dropped.map((segmentPath) => fs.rm(segmentPath, { force: true }).catch(() => undefined)),
+	);
+	if (keep.length === 0) {
+		throw new Error(
+			dropped.length > 0
+				? "Only the discarded pre-countdown segment was recorded"
+				: "No Linux capture segments were recorded",
+		);
 	}
 
+	const segments = keep;
 	if (segments.length === 1) {
 		if (segments[0] !== finalVideoPath) {
 			await moveFileWithOverwrite(segments[0], finalVideoPath);
@@ -558,15 +593,31 @@ async function finalizeLinuxCaptureRecording(finalVideoPath: string) {
 	);
 	setLinuxCaptureSegments([]);
 
-	const audioSegments = linuxSystemAudioSegments;
-	setLinuxSystemAudioSegments([]);
+	// Audio segments mirror video segments 1:1, so the same pre-countdown
+	// discard applies to them.
+	const { keep: audioKeep, dropped: audioDropped } = selectFinalizableLinuxSegments(
+		linuxSystemAudioSegments,
+		discardFirst,
+	);
+	setLinuxSystemAudioSegments(audioKeep);
+	await Promise.all(
+		audioDropped.map((segmentPath) => fs.rm(segmentPath, { force: true }).catch(() => undefined)),
+	);
+
+	const audioSegments = audioKeep;
 	if (audioSegments.length > 0) {
 		const sidecarPath = systemAudioSidecarPathFor(finalVideoPath);
 		try {
 			if (audioSegments.length === 1) {
 				await moveFileWithOverwrite(audioSegments[0], sidecarPath);
 			} else {
-				await stitchLinuxSegments(getFfmpegBinaryPath(), audioSegments, sidecarPath);
+				// Stitch with the audio-capable ffmpeg the probe selected; the
+				// bundled binary may be the one lacking this machine's pulse device.
+				await stitchLinuxSegments(
+					linuxSystemAudioFfmpegPath ?? getFfmpegBinaryPath(),
+					audioSegments,
+					sidecarPath,
+				);
 				await Promise.all(
 					audioSegments.map((segmentPath) =>
 						fs.rm(segmentPath, { force: true }).catch(() => undefined),
@@ -895,22 +946,26 @@ export function registerRecordingHandlers(
 					);
 
 					// Resolve the system-audio monitor source up front; when it is
-					// missing we still record video-only and let the renderer explain.
-					let systemAudioUnavailable = false;
+				// missing we still record video-only and let the renderer explain.
+					let systemAudioUnavailable: LinuxSystemAudioUnavailableReason | null =
+						null;
 					if (options?.capturesSystemAudio) {
 						const systemAudio = await getLinuxSystemAudioCapture();
 						if (systemAudio.available && systemAudio.sourceName) {
 							setLinuxSystemAudioSourceName(systemAudio.sourceName);
+							setLinuxSystemAudioFfmpegPath(systemAudio.ffmpegPath ?? null);
 						} else {
 							console.warn(
 								"Native Linux system audio unavailable:",
 								systemAudio.reason,
 							);
 							setLinuxSystemAudioSourceName(null);
-							systemAudioUnavailable = true;
+							setLinuxSystemAudioFfmpegPath(null);
+							systemAudioUnavailable = systemAudio.reason ?? "no-pulse-device";
 						}
 					} else {
 						setLinuxSystemAudioSourceName(null);
+						setLinuxSystemAudioFfmpegPath(null);
 					}
 					setLinuxSystemAudioSegments([]);
 
@@ -929,7 +984,11 @@ export function registerRecordingHandlers(
 					setLinuxCaptureSegments([]);
 					setLinuxCapturePaused(false);
 					setLinuxCaptureStopRequested(false);
-					await startLinuxCaptureSegment(source, firstSegmentPath);
+					setLinuxCaptureDiscardFirstSegment(Boolean(options?.warmStart));
+					const { startedAtMs } = await startLinuxCaptureSegment(
+						source,
+						firstSegmentPath,
+					);
 					setLinuxNativeCaptureActive(true);
 					setNativeScreenRecordingActive(true);
 					recordNativeCaptureDiagnostics({
@@ -945,7 +1004,9 @@ export function registerRecordingHandlers(
 					return {
 						success: true,
 						microphoneFallbackRequired: Boolean(options?.capturesMicrophone),
-						systemAudioFallbackRequired: systemAudioUnavailable,
+						systemAudioFallbackRequired: systemAudioUnavailable !== null,
+						systemAudioFallbackReason: systemAudioUnavailable ?? undefined,
+						startedAtMs,
 					};
 				} catch (error) {
 					recordNativeCaptureDiagnostics({
@@ -980,6 +1041,7 @@ export function registerRecordingHandlers(
 					setLinuxCaptureTargetPath(null);
 					setLinuxCaptureStopRequested(false);
 					setLinuxCapturePaused(false);
+					setLinuxCaptureDiscardFirstSegment(false);
 					setLinuxSystemAudioProcess(null);
 					setLinuxSystemAudioSourceName(null);
 					setLinuxSystemAudioSegmentPath(null);
@@ -1527,6 +1589,7 @@ export function registerRecordingHandlers(
 					setLinuxCaptureTargetPath(null);
 					setLinuxCaptureStopRequested(false);
 					setLinuxCapturePaused(false);
+					setLinuxCaptureDiscardFirstSegment(false);
 					try {
 						linuxSystemAudioProcess?.kill();
 					} catch {
@@ -1785,13 +1848,17 @@ export function registerRecordingHandlers(
 			try {
 				await stopLinuxCaptureSegment();
 				setLinuxCapturePaused(true);
+				// The video piece kept recording until the clean stop completed, so
+				// the cursor timeline must treat this instant — not the button-press
+				// moment the renderer used — as where the video freezes.
+				const pausedAtMs = Date.now();
 				recordNativeCaptureDiagnostics({
 					backend: "linux-x11grab",
 					phase: "stop",
 					outputPath: linuxCaptureTargetPath,
 					processOutput: linuxCaptureOutputBuffer.trim() || undefined,
 				});
-				return { success: true };
+				return { success: true, pausedAtMs };
 			} catch (error) {
 				return {
 					success: false,
@@ -1886,9 +1953,12 @@ export function registerRecordingHandlers(
 					/\.[^.]+$/,
 					"",
 				)}.segment-${linuxCaptureSegments.length}.mp4`;
-				await startLinuxCaptureSegment(source, nextSegmentPath);
+				const { startedAtMs } = await startLinuxCaptureSegment(
+					source,
+					nextSegmentPath,
+				);
 				setLinuxCapturePaused(false);
-				return { success: true };
+				return { success: true, startedAtMs };
 			} catch (error) {
 				// Resume failed: clean up the half-started segment but keep the
 				// session alive so Stop still finalizes what was recorded before

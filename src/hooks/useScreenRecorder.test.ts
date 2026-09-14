@@ -6,6 +6,7 @@ import {
 	normalizeBrowserMicrophoneProfile,
 	resolveBrowserCaptureCursorPolicy,
 	describeNativeLinuxCaptureUnavailable,
+	resolveVideoStartEpochMs,
 	shouldUseNativeWindowsCaptureForSource,
 	stopAndDiscardNativeCapture,
 } from "./useScreenRecorder";
@@ -213,6 +214,22 @@ describe("describeNativeLinuxCaptureUnavailable", () => {
 
 	it("falls back to a generic message for unknown reasons", () => {
 		expect(describeNativeLinuxCaptureUnavailable(undefined)).toMatch(/unavailable/);
+	});
+});
+
+describe("resolveVideoStartEpochMs", () => {
+	it("prefers the main process's capture-start epoch", () => {
+		expect(resolveVideoStartEpochMs(1000, 2000)).toBe(1000);
+	});
+
+	it("clamps a future timestamp to the fallback", () => {
+		expect(resolveVideoStartEpochMs(3000, 2000)).toBe(2000);
+	});
+
+	it("falls back when the epoch is missing or invalid", () => {
+		expect(resolveVideoStartEpochMs(undefined, 2000)).toBe(2000);
+		expect(resolveVideoStartEpochMs(0, 2000)).toBe(2000);
+		expect(resolveVideoStartEpochMs(Number.NaN, 2000)).toBe(2000);
 	});
 });
 

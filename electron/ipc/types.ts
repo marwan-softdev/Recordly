@@ -13,6 +13,12 @@ export type NativeMacRecordingOptions = {
 	capturesMicrophone?: boolean;
 	microphoneDeviceId?: string;
 	microphoneLabel?: string;
+	/**
+	 * The caller pauses immediately after start to run a countdown. Linux
+	 * native capture flags the pre-countdown segment as throwaway and drops
+	 * it when stitching, so the saved video begins when the countdown ends.
+	 */
+	warmStart?: boolean;
 };
 
 export type WindowBounds = {
