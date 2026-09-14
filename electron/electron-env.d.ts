@@ -253,6 +253,8 @@ interface Window {
 				capturesMicrophone?: boolean;
 				microphoneDeviceId?: string;
 				microphoneLabel?: string;
+				/** Linux native capture drops the pre-countdown segment when set. */
+				warmStart?: boolean;
 			},
 		) => Promise<{
 			success: boolean;
@@ -262,6 +264,9 @@ interface Window {
 			userNotified?: boolean;
 			microphoneFallbackRequired?: boolean;
 			systemAudioFallbackRequired?: boolean;
+			systemAudioFallbackReason?: "no-pulse-device" | "no-monitor-source";
+			/** Epoch ms of the first video frame (Linux native capture). */
+			startedAtMs?: number;
 		}>;
 		stopNativeScreenRecording: () => Promise<{
 			success: boolean;
@@ -279,15 +284,19 @@ interface Window {
 			success: boolean;
 			diagnostics?: NativeCaptureDiagnostics | null;
 		}>;
-		pauseNativeScreenRecording: () => Promise<{
-			success: boolean;
-			message?: string;
-			error?: string;
-		}>;
 		resumeNativeScreenRecording: () => Promise<{
 			success: boolean;
 			message?: string;
 			error?: string;
+			/** Epoch ms of the resumed segment's first video frame (Linux native). */
+			startedAtMs?: number;
+		}>;
+		pauseNativeScreenRecording: () => Promise<{
+			success: boolean;
+			message?: string;
+			error?: string;
+			/** Epoch ms when the video piece actually stopped (Linux native). */
+			pausedAtMs?: number;
 		}>;
 		pauseCursorCapture: (pausedAtMs?: number) => Promise<{
 			success: boolean;

@@ -56,8 +56,10 @@ export let linuxCaptureStopRequested = false;
 export let linuxCapturePaused = false;
 export let linuxCaptureSegmentPath: string | null = null;
 export let linuxCaptureSegments: string[] = [];
+export let linuxCaptureDiscardFirstSegment = false;
 export let linuxSystemAudioProcess: ChildProcess | null = null;
 export let linuxSystemAudioSourceName: string | null = null;
+export let linuxSystemAudioFfmpegPath: string | null = null;
 export let linuxSystemAudioSegmentPath: string | null = null;
 export let linuxSystemAudioSegments: string[] = [];
 
@@ -210,11 +212,17 @@ export function setLinuxCaptureSegmentPath(v: string | null) {
 export function setLinuxCaptureSegments(v: string[]) {
 	linuxCaptureSegments = v;
 }
+export function setLinuxCaptureDiscardFirstSegment(v: boolean) {
+	linuxCaptureDiscardFirstSegment = v;
+}
 export function setLinuxSystemAudioProcess(v: ChildProcess | null) {
 	linuxSystemAudioProcess = v;
 }
 export function setLinuxSystemAudioSourceName(v: string | null) {
 	linuxSystemAudioSourceName = v;
+}
+export function setLinuxSystemAudioFfmpegPath(v: string | null) {
+	linuxSystemAudioFfmpegPath = v;
 }
 export function setLinuxSystemAudioSegmentPath(v: string | null) {
 	linuxSystemAudioSegmentPath = v;
