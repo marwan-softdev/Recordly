@@ -20,7 +20,9 @@ import { startWindowBoundsCapture, stopWindowBoundsCapture } from "../cursor/bou
 import { startInteractionCapture, stopInteractionCapture } from "../cursor/interaction";
 import { startNativeCursorMonitor, stopNativeCursorMonitor } from "../cursor/monitor";
 import {
+	isCursorCapturePaused,
 	normalizeCursorTelemetrySamples,
+	pauseCursorCapture,
 	pauseCursorCaptureAtBoundary,
 	persistPendingCursorTelemetry,
 	resetCursorCaptureClock,
@@ -110,10 +112,13 @@ import {
 	ffmpegCaptureProcess,
 	ffmpegCaptureTargetPath,
 	ffmpegScreenRecordingActive,
+	activeCursorSamples,
 	lastNativeCaptureDiagnostics,
 	linuxCaptureDiscardFirstSegment,
 	linuxCaptureOutputBuffer,
 	isCursorCaptureActive,
+	pendingCursorSamples,
+	cursorCaptureStartTimeMs,
 	linuxCapturePaused,
 	linuxCaptureProcess,
 	linuxCaptureSegmentPath,
@@ -442,12 +447,106 @@ async function resolveExistingPath(...candidates: Array<string | null | undefine
 	return null;
 }
 
+// ── Cursor-clock startup calibration ─────────────────────────────────────────
+// ffmpeg needs ~0.3s after launch before x11grab delivers its first frame, so
+// the video's true t=0 sits that far after the process spawn. ffmpeg's own
+// -progress output reports frame timestamps; comparing them to wall time at
+// the first report measures the exact lag per segment and the cursor clock is
+// corrected by that amount (no hardcoded constant).
+
+type LinuxCursorStartupCalibration = {
+	segmentSpawnMs: number;
+	isFirstSegment: boolean;
+	calibrated: boolean;
+	fallbackTimer: NodeJS.Timeout;
+};
+
+let linuxCursorStartupCalibration: LinuxCursorStartupCalibration | null = null;
+// True once a warm start's first resume has happened (the discarded
+// pre-countdown segment's rebase must run exactly once).
+let linuxWarmStartResumeDone = false;
+
+function shiftLinuxCursorSamples(lagMs: number) {
+	if (lagMs <= 0) return;
+	const shift = (samples: CursorTelemetryPoint[]) =>
+		samples.map((sample) => ({ ...sample, timeMs: sample.timeMs + lagMs }));
+	setActiveCursorSamples(shift(activeCursorSamples));
+	setPendingCursorSamples(shift(pendingCursorSamples));
+}
+
+function applyLinuxCursorStartupLag(
+	calibration: LinuxCursorStartupCalibration,
+	lagMs: number,
+) {
+	if (calibration.isFirstSegment || !isCursorCapturePaused()) {
+		// No pause boundary to lean on: shift the epoch and the samples taken
+		// so far so the whole track moves onto the video's true t=0.
+		if (lagMs > 0) {
+			setCursorCaptureStartTimeMs(cursorCaptureStartTimeMs + lagMs);
+			shiftLinuxCursorSamples(lagMs);
+		}
+		return;
+	}
+	// The clock is parked at the previous segment's stop; the startup lag
+	// belongs to the gap, so resume exactly at this segment's first frame.
+	resumeCursorCapture(calibration.segmentSpawnMs + lagMs);
+}
+
+function calibrateLinuxCursorStartup(chunk: string) {
+	const calibration = linuxCursorStartupCalibration;
+	if (!calibration || calibration.calibrated) {
+		return;
+	}
+	const match =
+		chunk.match(/out_time_us=(-?\d+)/) ?? chunk.match(/out_time_ms=(-?\d+)/);
+	if (!match) {
+		return;
+	}
+	const videoTimeMs = Number(match[1]) / 1000;
+	if (!Number.isFinite(videoTimeMs) || videoTimeMs < 0) {
+		return;
+	}
+	calibration.calibrated = true;
+	clearTimeout(calibration.fallbackTimer);
+	const rawLagMs = Date.now() - calibration.segmentSpawnMs - videoTimeMs;
+	applyLinuxCursorStartupLag(
+		calibration,
+		Math.min(Math.max(Math.round(rawLagMs), 0), 1500),
+	);
+}
+
+function armLinuxCursorStartupCalibration(
+	segmentSpawnMs: number,
+	isFirstSegment: boolean,
+) {
+	if (linuxCursorStartupCalibration) {
+		clearTimeout(linuxCursorStartupCalibration.fallbackTimer);
+	}
+	const calibration: LinuxCursorStartupCalibration = {
+		segmentSpawnMs,
+		isFirstSegment,
+		calibrated: false,
+		fallbackTimer: setTimeout(() => {
+			if (linuxCursorStartupCalibration !== calibration || calibration.calibrated) {
+				return;
+			}
+			calibration.calibrated = true;
+			// -progress never reported; fall back to the spawn-time epoch.
+			applyLinuxCursorStartupLag(calibration, 0);
+		}, 3000),
+	};
+	linuxCursorStartupCalibration = calibration;
+}
+
 async function startLinuxCaptureSegment(
 	source: SelectedSource,
 	segmentPath: string,
+	onSpawned?: (startedAtMs: number) => void,
 ): Promise<{ proc: ChildProcessWithoutNullStreams; startedAtMs: number }> {
 	const ffmpegPath = getFfmpegBinaryPath();
 	const args = await buildFfmpegCaptureArgs(source, segmentPath);
+	// Route ffmpeg's progress reports to stdout for startup calibration.
+	args.splice(args.length - 1, 0, "-progress", "pipe:1");
 	const recordingsDir = await getRecordingsDir();
 
 	let captureOutput = "";
@@ -457,20 +556,37 @@ async function startLinuxCaptureSegment(
 		cwd: recordingsDir,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
-	// x11grab starts grabbing frames within ~100ms of spawn, so this instant —
-	// not the post-readiness-wait moment — is the video timeline's t=0. The
-	// renderer anchors cursor telemetry to it via the start/resume result.
+	// x11grab starts grabbing frames shortly after spawn; the exact instant is
+	// measured via -progress and corrected onto the cursor clock. This spawn
+	// instant is also what the renderer anchors the video timeline to.
 	const startedAtMs = Date.now();
 	setLinuxCaptureProcess(proc);
 	attachLinuxCaptureLifecycle(proc);
-	// Begin cursor tracking at the video's first frame, not when the renderer's
-	// later handshake lands (~1.5s afterwards, which left the video's opening
-	// without any cursor data).
-	startCursorCaptureSession(startedAtMs);
+
+	// Cursor session per segment kind:
+	// - first segment: fresh session at the spawn instant;
+	// - warm-start first resume: rebase onto the kept footage (the caller's
+	//   onSpawned does this) and hold the clock paused until calibration;
+	// - later segments: keep the session untouched — re-initializing here
+	//   would erase the samples recorded so far. Calibration extends it.
+	const discardedWarmStartSegment =
+		linuxCaptureSegments.length === 0 &&
+		linuxCaptureDiscardFirstSegment &&
+		!linuxWarmStartResumeDone;
+	const isFirstSegment = linuxCaptureSegments.length === 0;
+	if (isFirstSegment && !discardedWarmStartSegment) {
+		startCursorCaptureSession(startedAtMs);
+		armLinuxCursorStartupCalibration(startedAtMs, true);
+	} else if (!discardedWarmStartSegment) {
+		armLinuxCursorStartupCalibration(startedAtMs, false);
+	}
+	onSpawned?.(startedAtMs);
 
 	proc.stdout.on("data", (chunk: Buffer) => {
-		captureOutput += chunk.toString();
+		const text = chunk.toString();
+		captureOutput += text;
 		setLinuxCaptureOutputBuffer(captureOutput);
+		calibrateLinuxCursorStartup(text);
 	});
 	proc.stderr.on("data", (chunk: Buffer) => {
 		captureOutput += chunk.toString();
@@ -1026,6 +1142,7 @@ export function registerRecordingHandlers(
 					setLinuxCapturePaused(false);
 					setLinuxCaptureStopRequested(false);
 					setLinuxCaptureDiscardFirstSegment(Boolean(options?.warmStart));
+					linuxWarmStartResumeDone = false;
 					const { startedAtMs } = await startLinuxCaptureSegment(
 						source,
 						firstSegmentPath,
@@ -1083,6 +1200,7 @@ export function registerRecordingHandlers(
 					setLinuxCaptureStopRequested(false);
 					setLinuxCapturePaused(false);
 					setLinuxCaptureDiscardFirstSegment(false);
+					linuxWarmStartResumeDone = false;
 					setLinuxSystemAudioProcess(null);
 					setLinuxSystemAudioSourceName(null);
 					setLinuxSystemAudioSegmentPath(null);
@@ -1631,6 +1749,7 @@ export function registerRecordingHandlers(
 					setLinuxCaptureStopRequested(false);
 					setLinuxCapturePaused(false);
 					setLinuxCaptureDiscardFirstSegment(false);
+					linuxWarmStartResumeDone = false;
 					try {
 						linuxSystemAudioProcess?.kill();
 					} catch {
@@ -1996,22 +2115,31 @@ export function registerRecordingHandlers(
 					/\.[^.]+$/,
 					"",
 				)}.segment-${linuxCaptureSegments.length}.mp4`;
+				const discardPending =
+					linuxCaptureDiscardFirstSegment && !linuxWarmStartResumeDone;
 				const { startedAtMs } = await startLinuxCaptureSegment(
 					source,
 					nextSegmentPath,
+					(spawnMs) => {
+						if (!discardPending) {
+							return;
+						}
+						// First resume of a warm start: the pre-countdown segment is
+						// throwaway, so the cursor clock rebases onto the kept
+						// footage's first frame — at the spawn instant itself, not
+						// after the readiness wait (which left a ~1s sample hole).
+						linuxWarmStartResumeDone = true;
+						if (isCursorCaptureActive) {
+							rebaseCursorCaptureSession(spawnMs);
+						} else {
+							startCursorCaptureSession(spawnMs);
+						}
+						// Park the clock at the new epoch; startup calibration resumes
+						// it exactly at the segment's first frame.
+						pauseCursorCapture(spawnMs);
+					},
 				);
 				setLinuxCapturePaused(false);
-				if (linuxCaptureDiscardFirstSegment) {
-					// First resume of a warm start: the pre-countdown segment is
-					// throwaway, so rebase the cursor clock onto the kept footage's
-					// first frame and drop the discarded segment's samples.
-					rebaseCursorCaptureSession(startedAtMs);
-				} else {
-					// Mid-recording resume: extend the cursor timeline precisely at
-					// the new segment's first frame; the renderer's echo call
-					// no-ops (not paused anymore).
-					resumeCursorCapture(startedAtMs);
-				}
 				return { success: true, startedAtMs };
 			} catch (error) {
 				// Resume failed: clean up the half-started segment but keep the
