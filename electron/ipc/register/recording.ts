@@ -468,8 +468,10 @@ let linuxWarmStartResumeDone = false;
 
 function shiftLinuxCursorSamples(lagMs: number) {
 	if (lagMs <= 0) return;
+	// Stored positions were computed against the spawn epoch (p = wall - spawn),
+	// so each sits `lag` past its true video position (q = p - lag); subtract.
 	const shift = (samples: CursorTelemetryPoint[]) =>
-		samples.map((sample) => ({ ...sample, timeMs: sample.timeMs + lagMs }));
+		samples.map((sample) => ({ ...sample, timeMs: sample.timeMs - lagMs }));
 	setActiveCursorSamples(shift(activeCursorSamples));
 	setPendingCursorSamples(shift(pendingCursorSamples));
 }
@@ -545,8 +547,10 @@ async function startLinuxCaptureSegment(
 ): Promise<{ proc: ChildProcessWithoutNullStreams; startedAtMs: number }> {
 	const ffmpegPath = getFfmpegBinaryPath();
 	const args = await buildFfmpegCaptureArgs(source, segmentPath);
-	// Route ffmpeg's progress reports to stdout for startup calibration.
-	args.splice(args.length - 1, 0, "-progress", "pipe:1");
+	// Route ffmpeg's progress reports to stdout for startup calibration, at a
+	// fast 0.1s period so the first usable report lands well before anything
+	// else touches the cursor clock (default 0.5s loses races).
+	args.splice(args.length - 1, 0, "-progress", "pipe:1", "-stats_period", "0.1");
 	const recordingsDir = await getRecordingsDir();
 
 	let captureOutput = "";
