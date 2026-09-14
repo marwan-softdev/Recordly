@@ -111,6 +111,7 @@ import {
 	lastNativeCaptureDiagnostics,
 	linuxCaptureDiscardFirstSegment,
 	linuxCaptureOutputBuffer,
+	isCursorCaptureActive,
 	linuxCapturePaused,
 	linuxCaptureProcess,
 	linuxCaptureSegmentPath,
@@ -459,6 +460,10 @@ async function startLinuxCaptureSegment(
 	const startedAtMs = Date.now();
 	setLinuxCaptureProcess(proc);
 	attachLinuxCaptureLifecycle(proc);
+	// Begin cursor tracking at the video's first frame, not when the renderer's
+	// later handshake lands (~1.5s afterwards, which left the video's opening
+	// without any cursor data).
+	startCursorCaptureSession(startedAtMs);
 
 	proc.stdout.on("data", (chunk: Buffer) => {
 		captureOutput += chunk.toString();
@@ -632,6 +637,42 @@ async function finalizeLinuxCaptureRecording(finalVideoPath: string) {
 	}
 
 	return finalVideoPath;
+}
+
+/**
+ * Turns cursor tracking on with the video timeline's epoch. Shared by the
+ * set-recording-state handler and the Linux native capture spawn so sampling
+ * begins at the video's first frame instead of ~1.5s later.
+ */
+function startCursorCaptureSession(epochMs: number) {
+	stopCursorCapture();
+	stopInteractionCapture();
+	startWindowBoundsCapture();
+	void startNativeCursorMonitor();
+	setIsCursorCaptureActive(true);
+	setActiveCursorSamples([]);
+	setPendingCursorSamples([]);
+	setCursorCaptureStartTimeMs(epochMs);
+	resetCursorCaptureClock();
+	setLinuxCursorScreenPoint(null);
+	setLastLeftClick(null);
+	sampleCursorPoint();
+	startCursorSampling();
+	void startInteractionCapture();
+}
+
+/**
+ * Rebases the cursor clock onto a new segment's first frame and drops samples
+ * from before it — used when the warm-start pre-countdown segment is flagged
+ * throwaway so discarded footage doesn't anchor the timeline.
+ */
+function rebaseCursorCaptureSession(epochMs: number) {
+	setActiveCursorSamples([]);
+	setPendingCursorSamples([]);
+	setCursorCaptureStartTimeMs(epochMs);
+	resetCursorCaptureClock();
+	setLinuxCursorScreenPoint(null);
+	sampleCursorPoint();
 }
 
 export function registerRecordingHandlers(
@@ -1823,8 +1864,10 @@ export function registerRecordingHandlers(
 				setLinuxCapturePaused(true);
 				// The video piece kept recording until the clean stop completed, so
 				// the cursor timeline must treat this instant — not the button-press
-				// moment the renderer used — as where the video freezes.
+				// moment the renderer used — as where the video freezes. Applied
+				// natively here; the renderer's echo call no-ops (already paused).
 				const pausedAtMs = Date.now();
+				pauseCursorCaptureAtBoundary(pausedAtMs);
 				recordNativeCaptureDiagnostics({
 					backend: "linux-x11grab",
 					phase: "stop",
@@ -1931,6 +1974,17 @@ export function registerRecordingHandlers(
 					nextSegmentPath,
 				);
 				setLinuxCapturePaused(false);
+				if (linuxCaptureDiscardFirstSegment) {
+					// First resume of a warm start: the pre-countdown segment is
+					// throwaway, so rebase the cursor clock onto the kept footage's
+					// first frame and drop the discarded segment's samples.
+					rebaseCursorCaptureSession(startedAtMs);
+				} else {
+					// Mid-recording resume: extend the cursor timeline precisely at
+					// the new segment's first frame; the renderer's echo call
+					// no-ops (not paused anymore).
+					resumeCursorCapture(startedAtMs);
+				}
 				return { success: true, startedAtMs };
 			} catch (error) {
 				// Resume failed: clean up the half-started segment but keep the
@@ -2441,29 +2495,18 @@ export function registerRecordingHandlers(
 
 	ipcMain.handle("set-recording-state", (_, recording: boolean, startedAtMs?: unknown) => {
 		if (recording) {
-			stopCursorCapture();
-			stopInteractionCapture();
-			startWindowBoundsCapture();
-			void startNativeCursorMonitor();
-			setIsCursorCaptureActive(true);
-			setActiveCursorSamples([]);
-			setPendingCursorSamples([]);
-			// Prefer the renderer-provided video start epoch: the video timeline
-			// begins when capture starts, and this IPC arrives afterwards, so
-			// stamping the clock here would put cursor telemetry permanently
-			// ahead of the recorded frames.
-			const requestedEpochMs = typeof startedAtMs === "number" ? startedAtMs : NaN;
-			const cursorEpochMs =
-				Number.isFinite(requestedEpochMs) && requestedEpochMs > 0
-					? Math.min(requestedEpochMs, Date.now())
-					: Date.now();
-			setCursorCaptureStartTimeMs(cursorEpochMs);
-			resetCursorCaptureClock();
-			setLinuxCursorScreenPoint(null);
-			setLastLeftClick(null);
-			sampleCursorPoint();
-			startCursorSampling();
-			void startInteractionCapture();
+			if (process.platform === "linux" && linuxNativeCaptureActive && isCursorCaptureActive) {
+				// Native Linux capture already began the cursor session at the
+				// segment spawn with the video's exact epoch; re-initializing here
+				// would discard the samples collected since.
+			} else {
+				const requestedEpochMs = typeof startedAtMs === "number" ? startedAtMs : NaN;
+				const cursorEpochMs =
+					Number.isFinite(requestedEpochMs) && requestedEpochMs > 0
+						? Math.min(requestedEpochMs, Date.now())
+						: Date.now();
+				startCursorCaptureSession(cursorEpochMs);
+			}
 		} else {
 			setIsCursorCaptureActive(false);
 			stopCursorCapture();
