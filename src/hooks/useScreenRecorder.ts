@@ -463,6 +463,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const recordingSessionTimestamp = useRef<number | null>(null);
 	const nativeScreenRecording = useRef(false);
 	const nativeWindowsRecording = useRef(false);
+	// Linux native capture applies cursor pause/resume boundaries natively in
+	// the main process with exact segment times; the renderer must not echo
+	// them (its ~0.9s-later "now" stamps were racing and beating calibration).
+	const nativeLinuxRecording = useRef(false);
 	const nativeWarmStartActive = useRef(false);
 	const pendingNativeCleanupPath = useRef<string | null>(null);
 	const recordingStartGeneration = useRef(0);
@@ -1341,6 +1345,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		if (result.stopSucceeded) {
 			nativeScreenRecording.current = false;
 			nativeWindowsRecording.current = false;
+			nativeLinuxRecording.current = false;
 			nativeWarmStartActive.current = false;
 		}
 
@@ -1408,6 +1413,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (result.success) {
 					nativeScreenRecording.current = false;
 					nativeWindowsRecording.current = false;
+					nativeLinuxRecording.current = false;
 					nativeWarmStartActive.current = false;
 				}
 
@@ -1681,6 +1687,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					setRecording(false);
 					nativeScreenRecording.current = false;
 					nativeWindowsRecording.current = false;
+					nativeLinuxRecording.current = false;
 					nativeWarmStartActive.current = false;
 					cleanupCapturedMedia();
 					await window.electronAPI.setRecordingState(false);
@@ -1728,6 +1735,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							if (result.success) {
 								nativeScreenRecording.current = false;
 								nativeWindowsRecording.current = false;
+								nativeLinuxRecording.current = false;
 							}
 						})
 						.catch((error) => {
@@ -1836,6 +1844,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (nativeResult.success && startWasCancelled()) {
 					nativeScreenRecording.current = true;
 					nativeWindowsRecording.current = useNativeWindowsCapture;
+					nativeLinuxRecording.current = useNativeLinuxCapture;
 					nativeWarmStartActive.current = shouldWarmStartNativeCapture;
 					await discardActiveNativeCapture();
 					cleanupCapturedMedia();
@@ -1873,6 +1882,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (nativeResult.success) {
 					nativeScreenRecording.current = true;
 					nativeWindowsRecording.current = useNativeWindowsCapture;
+					nativeLinuxRecording.current = useNativeLinuxCapture;
 					if (nativeResult.systemAudioFallbackRequired && systemAudioEnabled) {
 						toast.warning(
 							nativeResult.systemAudioFallbackReason === "no-pulse-device"
@@ -2454,6 +2464,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				pauseMicFallbackRecorder();
 				markRecordingPaused(boundaryMs);
 				setPaused(true);
+				if (nativeLinuxRecording.current) {
+					// Linux native capture already froze the cursor timeline at the
+					// segment's true stop instant inside the pause handler; echoing
+					// a "now"-based boundary here raced and beat the calibration.
+					return;
+				}
 				try {
 					await window.electronAPI.pauseCursorCapture(cursorBoundaryMs);
 				} catch (error) {
@@ -2500,17 +2516,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				const boundaryMs = Date.now();
 				markRecordingResumed(boundaryMs);
 				setPaused(false);
+				if (nativeLinuxRecording.current) {
+					// Linux native capture resumes the cursor timeline at the new
+					// segment's calibrated first frame inside the resume handler;
+					// echoing here resumed at "now" (~1s late) and beat it.
+					return;
+				}
 				try {
-					// Linux native capture reports the resumed segment's real first
-					// frame time; anchor the cursor timeline there instead of the
-					// later renderer instant.
-					const resumedAtMs =
-						typeof result.startedAtMs === "number" &&
-						Number.isFinite(result.startedAtMs) &&
-						result.startedAtMs > 0
-							? Math.round(result.startedAtMs)
-							: boundaryMs;
-					await window.electronAPI.resumeCursorCapture(resumedAtMs);
+					// Other native platforms report no segment times; anchor the
+					// cursor timeline to this renderer instant as before.
+					await window.electronAPI.resumeCursorCapture(boundaryMs);
 				} catch (error) {
 					console.warn("Failed to resume cursor capture:", error);
 				}
