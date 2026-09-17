@@ -39,21 +39,6 @@ export function buildLinuxConcatListContent(segmentPaths: string[]): string {
 		.join("\n");
 }
 
-/**
- * Splits recorded segments into the ones to stitch and the ones to delete.
- * Countdown warm starts record a throwaway pre-countdown segment first;
- * dropping it makes the saved video begin when the countdown ends.
- */
-export function selectFinalizableLinuxSegments(
-	segmentPaths: string[],
-	discardFirst: boolean,
-): { keep: string[]; dropped: string[] } {
-	if (discardFirst && segmentPaths.length > 0) {
-		return { keep: segmentPaths.slice(1), dropped: segmentPaths.slice(0, 1) };
-	}
-	return { keep: segmentPaths, dropped: [] };
-}
-
 export async function stitchLinuxSegments(
 	ffmpegPath: string,
 	segmentPaths: string[],

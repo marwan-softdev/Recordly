@@ -9,7 +9,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setLinuxCaptureOutputBuffer, setLinuxCaptureStopRequested } from "../state";
 import {
 	buildLinuxConcatListContent,
-	selectFinalizableLinuxSegments,
 	stitchLinuxSegments,
 	waitForLinuxCaptureStart,
 	waitForLinuxCaptureStop,
@@ -192,32 +191,5 @@ describe("stitchLinuxSegments", () => {
 		await expect(
 			stitchLinuxSegments("ffmpeg", ["/tmp/only.mp4"], "/tmp/out.mp4"),
 		).rejects.toThrow("at least two segments");
-	});
-});
-
-describe("selectFinalizableLinuxSegments", () => {
-	it("keeps all segments when nothing is discarded", () => {
-		expect(selectFinalizableLinuxSegments(["/a.mp4", "/b.mp4"], false)).toEqual({
-			keep: ["/a.mp4", "/b.mp4"],
-			dropped: [],
-		});
-	});
-
-	it("drops the pre-countdown segment when flagged", () => {
-		expect(selectFinalizableLinuxSegments(["/a.mp4", "/b.mp4"], true)).toEqual({
-			keep: ["/b.mp4"],
-			dropped: ["/a.mp4"],
-		});
-	});
-
-	it("drops the only segment when flagged, leaving nothing to stitch", () => {
-		expect(selectFinalizableLinuxSegments(["/a.mp4"], true)).toEqual({
-			keep: [],
-			dropped: ["/a.mp4"],
-		});
-	});
-
-	it("handles an empty list", () => {
-		expect(selectFinalizableLinuxSegments([], true)).toEqual({ keep: [], dropped: [] });
 	});
 });
