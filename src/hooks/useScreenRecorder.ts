@@ -1798,7 +1798,14 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			} = preparedStart;
 			const useNativeCapture =
 				useNativeMacScreenCapture || useNativeWindowsCapture || useNativeLinuxCapture;
-			const shouldWarmStartNativeCapture = useNativeCapture && countdownDelay > 0;
+			// Linux native capture cold-starts on purpose: the countdown runs
+			// first and capture begins once, at the countdown's end. Its old
+			// warm start needed a throwaway pre-countdown segment (paused over
+			// the countdown, then dropped at stitch time) to mask the startup
+			// gap — the calibrated cursor clock made that machinery, and the
+			// segment cut it caused, unnecessary.
+			const shouldWarmStartNativeCapture =
+				useNativeCapture && !useNativeLinuxCapture && countdownDelay > 0;
 			if (countdownDelay > 0 && !shouldWarmStartNativeCapture) {
 				setCountdownActive(true);
 				try {
@@ -1828,9 +1835,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						capturesMicrophone: microphoneEnabled,
 						microphoneDeviceId,
 						microphoneLabel: micLabel,
-						// Linux native capture records a throwaway pre-countdown
-						// segment that is dropped at stitch time.
-						warmStart: shouldWarmStartNativeCapture,
 					},
 				);
 				if (nativeResult.success) {

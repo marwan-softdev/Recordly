@@ -229,8 +229,6 @@ interface Window {
 				capturesMicrophone?: boolean;
 				microphoneDeviceId?: string;
 				microphoneLabel?: string;
-				/** Linux native capture drops the pre-countdown segment when set. */
-				warmStart?: boolean;
 			},
 		) => Promise<{
 			success: boolean;
