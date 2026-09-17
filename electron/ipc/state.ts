@@ -51,12 +51,12 @@ export let windowsPendingVideoPath: string | null = null;
 export let linuxCaptureProcess: ChildProcessWithoutNullStreams | null = null;
 export let linuxCaptureOutputBuffer = "";
 export let linuxCaptureTargetPath: string | null = null;
+export let linuxCaptureVaapi: { ffmpegPath: string; devicePath: string } | null = null;
 export let linuxNativeCaptureActive = false;
 export let linuxCaptureStopRequested = false;
 export let linuxCapturePaused = false;
 export let linuxCaptureSegmentPath: string | null = null;
 export let linuxCaptureSegments: string[] = [];
-export let linuxCaptureDiscardFirstSegment = false;
 export let linuxSystemAudioProcess: ChildProcess | null = null;
 export let linuxSystemAudioSourceName: string | null = null;
 export let linuxSystemAudioFfmpegPath: string | null = null;
@@ -197,6 +197,9 @@ export function setLinuxCaptureOutputBuffer(v: string) {
 export function setLinuxCaptureTargetPath(v: string | null) {
 	linuxCaptureTargetPath = v;
 }
+export function setLinuxCaptureVaapi(v: { ffmpegPath: string; devicePath: string } | null) {
+	linuxCaptureVaapi = v;
+}
 export function setLinuxNativeCaptureActive(v: boolean) {
 	linuxNativeCaptureActive = v;
 }
@@ -211,9 +214,6 @@ export function setLinuxCaptureSegmentPath(v: string | null) {
 }
 export function setLinuxCaptureSegments(v: string[]) {
 	linuxCaptureSegments = v;
-}
-export function setLinuxCaptureDiscardFirstSegment(v: boolean) {
-	linuxCaptureDiscardFirstSegment = v;
 }
 export function setLinuxSystemAudioProcess(v: ChildProcess | null) {
 	linuxSystemAudioProcess = v;
