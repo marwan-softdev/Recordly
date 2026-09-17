@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -18,6 +19,10 @@ import {
 import { RECORDINGS_DIR } from "./appPaths";
 import { showCursor } from "./cursorHider";
 import { getGpuSwitches } from "./gpuSwitches";
+import {
+	maybeProbeGpuAndOfferElectron39,
+	RELAUNCH_PARENT_PID_ENV,
+} from "./gpuFallback39";
 import {
 	cleanupAllExportStreams,
 	cleanupNativeVideoExportSessions,
@@ -185,9 +190,40 @@ let isAppQuitting = false;
 let isCreatingMainWindow = false;
 let isCreatingEditorWindow = false;
 const shouldEnforceSingleInstanceLock = !IS_DEV;
-const hasSingleInstanceLock = shouldEnforceSingleInstanceLock
-	? app.requestSingleInstanceLock()
-	: true;
+const relaunchParentPid = Number.parseInt(
+	process.env[RELAUNCH_PARENT_PID_ENV] ?? "",
+	10,
+);
+
+function acquireSingleInstanceLock(): boolean {
+	if (!shouldEnforceSingleInstanceLock) {
+		return true;
+	}
+	if (app.requestSingleInstanceLock()) {
+		return true;
+	}
+	// When this instance was just relaunched by the 40+ instance, that
+	// instance still holds the lock while it shuts down. Wait for the parent
+	// to disappear instead of dying — the relaunched engine is the point.
+	if (!Number.isFinite(relaunchParentPid) || relaunchParentPid <= 0) {
+		return false;
+	}
+	for (let attempt = 0; attempt < 40; attempt += 1) {
+		try {
+			process.kill(relaunchParentPid, 0);
+		} catch {
+			// Parent is gone; its single-instance lock must be released now.
+			break;
+		}
+		spawnSync("sleep", ["0.25"]);
+		if (app.requestSingleInstanceLock()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+const hasSingleInstanceLock = acquireSingleInstanceLock();
 
 if (!hasSingleInstanceLock) {
 	app.quit();
@@ -976,6 +1012,14 @@ app.whenReady().then(async () => {
 		await app.dock.show();
 	}
 	syncDockIcon();
+	// Linux Mesa/AMD detect-once: probe hardware GL, persist the verdict, and
+	// offer a restart into the staged Electron 39 binary when affected. Runs
+	// detached from startup so it never delays window creation.
+	void setTimeout(() => {
+		void maybeProbeGpuAndOfferElectron39().catch((error) => {
+			console.warn("[gpu-fallback] probe flow failed:", error);
+		});
+	}, 5000);
 	if (shouldUseTray()) {
 		createTray();
 		updateTrayMenu();

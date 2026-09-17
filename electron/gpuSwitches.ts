@@ -44,6 +44,7 @@ export function shouldForceLinuxEgl(env: NodeJS.ProcessEnv): boolean {
 export function getGpuSwitches(
 	platform: NodeJS.Platform,
 	env: NodeJS.ProcessEnv = process.env,
+	electronVersion: string = process.versions.electron ?? "",
 ): GpuSwitches {
 	if (platform === "darwin") {
 		return {
@@ -57,6 +58,17 @@ export function getGpuSwitches(
 	}
 
 	if (platform === "linux") {
+		const majorVersion = Number.parseInt(electronVersion, 10);
+		// Electron 39's default GL path works with hardware acceleration on
+		// Mesa/AMD (verified live: unmasked renderer "ANGLE (AMD Radeon
+		// radeonsi renoir, OpenGL 4.6)", stable context, no GPU-process
+		// exits) — where 43's path crashes with gbm_bo_import errors and
+		// needs the software-GL fallback switches below. Note: --use-gl=egl
+		// (the old AppImage combo) is actively rejected by 39's gl_factory;
+		// no switch at all is the correct configuration.
+		if (Number.isFinite(majorVersion) && majorVersion < 40) {
+			return {};
+		}
 		return {
 			...(shouldForceLinuxEgl(env)
 				? {
