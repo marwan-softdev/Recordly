@@ -31,11 +31,12 @@ const awaitPortFreeIndex = argv.indexOf("--await-port-free");
 const awaitPortFreeUrl =
 	awaitPortFreeIndex >= 0 ? (argv[awaitPortFreeIndex + 1] ?? "") : "";
 
-// Mirrors the packaged auto-switch in electron/gpuFallback39.ts (same keys in
-// app-settings.json): once this machine's probe said "software" and the user
-// accepted the restart offer, skip the pointless 43 phase entirely — no
-// launch, probe, quit, relaunch. Dev-only naming: the dev profile's userData
-// dir is ~/.config/Recordly-dev.
+// Skips the pointless 43 phase once this machine's GL verdict is "software"
+// and the switch was accepted — the keys live in the dev profile's
+// app-settings.json (written when the probe/offer machinery was still in the
+// app; since its removal nothing writes them, so on a fresh profile either
+// set them manually or use `npm run dev:39`). Dev-only naming: the dev
+// profile's userData dir is ~/.config/Recordly-dev.
 function hasAcceptedElectron39Switch() {
 	if (process.platform !== "linux") return false;
 	try {
