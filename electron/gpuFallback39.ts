@@ -227,13 +227,13 @@ async function offerElectron39Restart(
 	devServerUrl?: string,
 ): Promise<void> {
 	const previousChoice = readAppSetting(GPU_RESTART_CHOICE_KEY);
-	if (previousChoice === "accepted") {
-		// They already chose the fast engine — relaunch without asking again.
-		if (devServerUrl) {
-			relaunchDevStackIntoStagedElectron39(stagedBinaryPath, app.getAppPath(), devServerUrl);
-		} else {
-			relaunchIntoStagedElectron39(stagedBinaryPath, app.getAppPath(), process.argv);
-		}
+	// Dev never silently restarts: quitting and re-spawning the whole vite
+	// stack is disruptive enough that it should always be an explicit click.
+	// (Run `npm run dev:39` to start there directly with no restart at all.)
+	// Packaged builds honor a remembered "accepted" and relaunch quietly —
+	// users shouldn't have to re-answer on every app launch.
+	if (previousChoice === "accepted" && !devServerUrl) {
+		relaunchIntoStagedElectron39(stagedBinaryPath, app.getAppPath(), process.argv);
 		return;
 	}
 	if (previousChoice === "dismissed") {
