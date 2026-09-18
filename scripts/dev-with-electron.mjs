@@ -4,16 +4,18 @@
 // LINUX-CURSOR-WORKLOG.md "Electron 39 fallback").
 //
 //   npm run dev                       # stock Electron (43) — the gpu-fallback probe
-//                                     #   offers the switch when the GPU path is broken
+//                                     #   offers the switch when the GPU path is broken;
+//                                     #   once the switch was accepted, starts on 39 directly
 //   npm run dev:39                    # require the staged Electron 39 (error if missing)
-//   npm run dev:43                    # stock, identical to plain dev
+//   npm run dev:43                    # stock, ignores the accepted switch
 //
 // The gpu-fallback restart flow also calls this script detached with:
 //   --await-port-free <url>           # wait for the previous dev server to die first
 //                                     # (implies --require-staged)
 //
 // Must run before `vite` so the plugin spawns the overridden binary.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,9 +26,31 @@ const stagedDistDir = path.dirname(stagedBinary);
 
 const argv = process.argv.slice(2);
 const requireStaged = argv.includes("--require-staged") || argv.includes("--await-port-free");
+const forceStock = argv.includes("--restore");
 const awaitPortFreeIndex = argv.indexOf("--await-port-free");
 const awaitPortFreeUrl =
 	awaitPortFreeIndex >= 0 ? (argv[awaitPortFreeIndex + 1] ?? "") : "";
+
+// Mirrors the packaged auto-switch in electron/gpuFallback39.ts (same keys in
+// app-settings.json): once this machine's probe said "software" and the user
+// accepted the restart offer, skip the pointless 43 phase entirely — no
+// launch, probe, quit, relaunch. Dev-only naming: the dev profile's userData
+// dir is ~/.config/Recordly-dev.
+function hasAcceptedElectron39Switch() {
+	if (process.platform !== "linux") return false;
+	try {
+		const settingsPath = path.join(
+			homedir(),
+			".config",
+			"Recordly-dev",
+			"app-settings.json",
+		);
+		const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+		return settings.gpuProbeVerdict === "software" && settings.gpuRestartChoice === "accepted";
+	} catch {
+		return false;
+	}
+}
 
 if (requireStaged) {
 	// Explicit dev:39, or the gpu-fallback relaunch (--await-port-free).
@@ -42,6 +66,11 @@ if (requireStaged) {
 	// getElectronPath() joins this dir with path.txt's relative name.
 	process.env.ELECTRON_OVERRIDE_DIST_PATH = stagedDistDir;
 	console.log(`[dev-with-electron] Using staged Electron: ${stagedBinary}`);
+} else if (!forceStock && hasAcceptedElectron39Switch() && existsSync(stagedBinary)) {
+	process.env.ELECTRON_OVERRIDE_DIST_PATH = stagedDistDir;
+	console.log(
+		"[dev-with-electron] starting directly on Electron 39 (switch already accepted on this machine)",
+	);
 } else {
 	delete process.env.ELECTRON_OVERRIDE_DIST_PATH;
 	console.log("[dev-with-electron] Using the stock node_modules/electron binary (43).");
