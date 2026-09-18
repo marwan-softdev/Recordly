@@ -83,6 +83,7 @@ import {
 	waitForLinuxCaptureStart,
 	waitForLinuxCaptureStop,
 } from "../recording/linux";
+import { getSourcePickerVisibilityForPlatform } from "../linuxPortal";
 import { getLinuxVaapiCapture } from "../recording/linuxVaapi";
 import { getLinuxNvencCapture } from "../recording/linuxNvenc";
 import {
@@ -2259,6 +2260,20 @@ export function registerRecordingHandlers(
 			unavailableReason: availability.available ? undefined : availability.reason,
 		});
 		return availability;
+	});
+
+	// Whether Recordly's own Screen/Window picker should be shown. On Linux
+	// X11 sessions without a ScreenCast portal it is the only working capture
+	// path; with a portal (GNOME/KDE) the system dialog covers it and the
+	// picker stays hidden as before.
+	ipcMain.handle("get-source-picker-visibility", async () => {
+		const visibility = await getSourcePickerVisibilityForPlatform();
+		if (visibility.reason === "no-portal-screencast") {
+			console.log(
+				"[source-picker] shown: no ScreenCast portal on this X11 session — the picker is the only working capture path",
+			);
+		}
+		return visibility;
 	});
 
 	ipcMain.handle("get-last-native-capture-diagnostics", async () => {
