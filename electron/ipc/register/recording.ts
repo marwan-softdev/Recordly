@@ -83,6 +83,7 @@ import {
 } from "../recording/linux";
 import { getSourcePickerVisibilityForPlatform } from "../linuxPortal";
 import { getLinuxVaapiCapture } from "../recording/linuxVaapi";
+import { getLinuxNvencCapture } from "../recording/linuxNvenc";
 import {
 	type LinuxSystemAudioUnavailableReason,
 	getLinuxSystemAudioCapture,
@@ -114,6 +115,7 @@ import {
 	lastNativeCaptureDiagnostics,
 	linuxCaptureOutputBuffer,
 	linuxCaptureVaapi,
+	linuxCaptureNvenc,
 	isCursorCaptureActive,
 	pendingCursorSamples,
 	cursorCaptureStartTimeMs,
@@ -148,6 +150,7 @@ import {
 	setLastLeftClick,
 	setLinuxCaptureOutputBuffer,
 	setLinuxCaptureVaapi,
+	setLinuxCaptureNvenc,
 	setLinuxCapturePaused,
 	setLinuxCaptureProcess,
 	setLinuxCaptureSegmentPath,
@@ -577,13 +580,15 @@ async function startLinuxCaptureSegment(
 	source: SelectedSource,
 	segmentPath: string,
 ): Promise<{ proc: ChildProcessWithoutNullStreams; startedAtMs: number }> {
-	// VAAPI records with the system install (the bundled static build has no
-	// vaapi support); the CPU fallback uses the bundled binary as before.
-	const ffmpegPath = linuxCaptureVaapi?.ffmpegPath ?? getFfmpegBinaryPath();
+	// GPU tiers record with their probing binary (the bundled static build
+	// has no vaapi/nvenc support); the CPU fallback uses the bundled binary.
+	const ffmpegPath =
+		linuxCaptureVaapi?.ffmpegPath ?? linuxCaptureNvenc?.ffmpegPath ?? getFfmpegBinaryPath();
 	const args = await buildFfmpegCaptureArgs(source, segmentPath, {
 		vaapi: linuxCaptureVaapi
 			? { devicePath: linuxCaptureVaapi.devicePath }
 			: null,
+		nvenc: Boolean(linuxCaptureNvenc),
 	});
 	// Route ffmpeg's progress reports to stdout for startup calibration, at a
 	// fast 0.1s period so the first usable report lands well before anything
@@ -1164,18 +1169,32 @@ export function registerRecordingHandlers(
 								ffmpegPath: vaapi.ffmpegPath,
 								devicePath: vaapi.devicePath,
 							});
+							setLinuxCaptureNvenc(null);
 							console.info(
 								`Native Linux capture encoder: h264_vaapi (${vaapi.devicePath})`,
 							);
 						} else {
 							setLinuxCaptureVaapi(null);
-							console.info(
-								`Native Linux capture encoder: libx264 (VAAPI unavailable: ${vaapi.reason ?? "unknown"})`,
-							);
+					setLinuxCaptureNvenc(null);
+							// NVIDIA machines have no VAAPI — offer them NVENC
+							// before falling back to the CPU tier.
+							const nvenc = await getLinuxNvencCapture();
+							if (nvenc.available && nvenc.ffmpegPath) {
+								setLinuxCaptureNvenc({ ffmpegPath: nvenc.ffmpegPath });
+								console.info(
+									`Native Linux capture encoder: h264_nvenc (${nvenc.ffmpegPath})`,
+								);
+							} else {
+								setLinuxCaptureNvenc(null);
+								console.info(
+									`Native Linux capture encoder: libx264 (VAAPI unavailable: ${vaapi.reason ?? "unknown"}; NVENC unavailable: ${nvenc.reason ?? "unknown"})`,
+								);
+							}
 						}
 					} catch (error) {
 						setLinuxCaptureVaapi(null);
-						console.warn("Native Linux VAAPI probe failed:", error);
+						setLinuxCaptureNvenc(null);
+						console.warn("Native Linux GPU encoder probe failed:", error);
 					}
 					const { startedAtMs } = await startLinuxCaptureSegment(
 						source,
@@ -1234,6 +1253,7 @@ export function registerRecordingHandlers(
 					setLinuxCaptureStopRequested(false);
 					setLinuxCapturePaused(false);
 					setLinuxCaptureVaapi(null);
+					setLinuxCaptureNvenc(null);
 					setLinuxSystemAudioProcess(null);
 					setLinuxSystemAudioSourceName(null);
 					setLinuxSystemAudioSegmentPath(null);
@@ -1735,6 +1755,7 @@ export function registerRecordingHandlers(
 					setLinuxCaptureStopRequested(false);
 					setLinuxCapturePaused(false);
 					setLinuxCaptureVaapi(null);
+					setLinuxCaptureNvenc(null);
 					try {
 						linuxSystemAudioProcess?.kill();
 					} catch {
@@ -1765,6 +1786,7 @@ export function registerRecordingHandlers(
 					setLinuxCaptureStopRequested(false);
 					setLinuxCapturePaused(false);
 					setLinuxCaptureVaapi(null);
+					setLinuxCaptureNvenc(null);
 					try {
 						linuxSystemAudioProcess?.kill();
 					} catch {
