@@ -52,6 +52,7 @@ export let linuxCaptureProcess: ChildProcessWithoutNullStreams | null = null;
 export let linuxCaptureOutputBuffer = "";
 export let linuxCaptureTargetPath: string | null = null;
 export let linuxCaptureVaapi: { ffmpegPath: string; devicePath: string } | null = null;
+export let linuxCaptureNvenc: { ffmpegPath: string } | null = null;
 export let linuxNativeCaptureActive = false;
 export let linuxCaptureStopRequested = false;
 export let linuxCapturePaused = false;
@@ -199,6 +200,9 @@ export function setLinuxCaptureTargetPath(v: string | null) {
 }
 export function setLinuxCaptureVaapi(v: { ffmpegPath: string; devicePath: string } | null) {
 	linuxCaptureVaapi = v;
+}
+export function setLinuxCaptureNvenc(v: { ffmpegPath: string } | null) {
+	linuxCaptureNvenc = v;
 }
 export function setLinuxNativeCaptureActive(v: boolean) {
 	linuxNativeCaptureActive = v;

@@ -25,6 +25,8 @@ export function getDisplayWorkAreaForSource(source: SelectedSource) {
 export type LinuxCaptureEncoderOptions = {
 	/** When set, encode on the GPU via VAAPI instead of libx264 on the CPU. */
 	vaapi?: { devicePath: string } | null;
+	/** When set, encode on the GPU via NVENC (NVIDIA) instead of libx264. */
+	nvenc?: boolean | null;
 };
 
 export async function buildFfmpegCaptureArgs(
@@ -133,6 +135,39 @@ export async function buildFfmpegCaptureArgs(
 			];
 			const inputArgs = await buildLinuxX11grabInputArgs(source, displayEnv);
 			return [...inputArgs, ...vaapiOutputArgs];
+		}
+		if (options?.nvenc) {
+			// GPU encode (h264_nvenc) for NVIDIA machines — same rationale as the
+			// VAAPI tier: the CPU stays free, so full 60fps holds up under
+			// desktop load. NVENC uploads frames from system memory itself (no
+			// hwupload/-vaapi_device dance); constqp QP24 is constant-quality
+			// with no bitrate math, like CQP on the VAAPI side.
+			const nvencOutputArgs = [
+				"-an",
+				"-vf",
+				"showinfo,scale=in_range=full:out_range=tv:out_color_matrix=bt709:sws_dither=bayer,format=yuv420p",
+				"-c:v",
+				"h264_nvenc",
+				"-preset",
+				"p4",
+				"-rc",
+				"constqp",
+				"-qp",
+				"24",
+				"-colorspace",
+				"bt709",
+				"-color_primaries",
+				"bt709",
+				"-color_trc",
+				"bt709",
+				"-color_range",
+				"tv",
+				"-movflags",
+				"+faststart",
+				outputPath,
+			];
+			const inputArgs = await buildLinuxX11grabInputArgs(source, displayEnv);
+			return [...inputArgs, ...nvencOutputArgs];
 		}
 		const linuxOutputArgs = buildOutputArgs("full", "showinfo,", "ultrafast");
 		// CPU fallback tier: 30fps + ultrafast is deliberate. Encoding on the
