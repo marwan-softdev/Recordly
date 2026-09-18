@@ -8,6 +8,8 @@ export function useLaunchWindowSystemState(
 		boolean | null
 	>(null);
 	const [platform, setPlatform] = useState<string | null>(null);
+	// Hidden until known so the picker never flashes on Linux portal sessions.
+	const [showSourcePicker, setShowSourcePicker] = useState(false);
 	const [appVersion, setAppVersion] = useState<string | null>(null);
 	const [hideHudFromCapture, setHideHudFromCapture] = useState(true);
 
@@ -42,6 +44,24 @@ export function useLaunchWindowSystemState(
 			}
 		};
 		void loadPlatform();
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	useEffect(() => {
+		let cancelled = false;
+		const loadSourcePickerVisibility = async () => {
+			try {
+				const visibility = await window.electronAPI.getSourcePickerVisibility();
+				if (!cancelled) setShowSourcePicker(visibility.show);
+			} catch (error) {
+				// Without an answer the safe default is to show the picker —
+				// on portal-less X11 it is the only working capture path.
+				if (!cancelled) setShowSourcePicker(true);
+			}
+		};
+		void loadSourcePickerVisibility();
 		return () => {
 			cancelled = true;
 		};
@@ -133,6 +153,7 @@ export function useLaunchWindowSystemState(
 		recordingsDirectory,
 		hudOverlayMousePassthroughSupported,
 		platform,
+		showSourcePicker,
 		appVersion,
 		hideHudFromCapture,
 		setHideHudFromCapture,

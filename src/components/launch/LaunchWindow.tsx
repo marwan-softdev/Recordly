@@ -12,7 +12,7 @@ import {
 	XIcon,
 } from "@phosphor-icons/react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RxDragHandleDots2 } from "react-icons/rx";
 import { Separator } from "@/components/ui/separator";
 import { useScopedT } from "../../contexts/I18nContext";
@@ -38,6 +38,7 @@ import { MicPopover } from "./popovers/MicPopover";
 import { MorePopover } from "./popovers/MorePopover";
 import { ProjectPopover } from "./popovers/ProjectPopover";
 import { SourcePopover } from "./popovers/SourcePopover";
+import { isWindowSource, type DesktopSource } from "./popovers/launchPopoverTypes";
 import { WebcamPopover } from "./popovers/WebcamPopover";
 import { RecordingControls } from "./RecordingControls";
 import { MarqueeText } from "./SourceSelector";
@@ -109,6 +110,7 @@ function LaunchWindowContent() {
 	const {
 		hudOverlayMousePassthroughSupported,
 		platform,
+		showSourcePicker,
 		appVersion,
 		hideHudFromCapture,
 		chooseRecordingsDirectory,
@@ -201,6 +203,26 @@ function LaunchWindowContent() {
 		};
 	}, [syncSelectedSource]);
 
+	// Window sources on Linux go through browser capture, which burns the
+	// system cursor into the video — alongside the default-on overlay cursor
+	// that is a double cursor. Warn once per session; users who turned the
+	// overlay off only see the one real cursor and have nothing to warn about.
+	const windowCursorNoticeShownRef = useRef(false);
+	const [windowCursorNoticeVisible, setWindowCursorNoticeVisible] = useState(false);
+
+	const handleSourceSelectWithCursorNotice = async (source: DesktopSource) => {
+		await handleSourceSelect(source);
+		if (
+			platform === "linux" &&
+			isWindowSource(source) &&
+			!windowCursorNoticeShownRef.current
+		) {
+			windowCursorNoticeShownRef.current = true;
+			setWindowCursorNoticeVisible(true);
+			window.setTimeout(() => setWindowCursorNoticeVisible(false), 6000);
+		}
+	};
+
 	const hudStateTransition = {
 		duration: 0.24,
 		ease: [0.22, 1, 0.36, 1] as const,
@@ -220,10 +242,6 @@ function LaunchWindowContent() {
 		/>
 	);
 
-	// TODO(upstream): hide the picker on Linux only when the portal actually
-	// supports ScreenCast; on X11 without a screencast portal (e.g. Cinnamon)
-	// the picker is the only working capture path.
-	const showSourcePicker = true;
 
 	const idleControls = (
 		<>
@@ -231,7 +249,12 @@ function LaunchWindowContent() {
 				<>
 					<SourcePopover
 						selectedSource={selectedSource}
-						onSourceSelect={handleSourceSelect}
+						onSourceSelect={handleSourceSelectWithCursorNotice}
+						windowSourcesNote={
+							platform === "linux"
+								? t("recording.windowCursorCaption")
+								: undefined
+						}
 						onOpen={beginInteractiveHudAction}
 						trigger={
 							<Button
@@ -551,6 +574,21 @@ function LaunchWindowContent() {
 					</div>
 				</div>
 			</div>
+			<AnimatePresence>
+				{windowCursorNoticeVisible && (
+					<motion.div
+						initial={{ opacity: 0, y: 8 }}
+						animate={{ opacity: 1, y: 0 }}
+						exit={{ opacity: 0, y: 8 }}
+						transition={hudStateTransition}
+						className="launch-theme fixed bottom-28 left-1/2 -translate-x-1/2 z-50 pointer-events-auto rounded-[11px] border border-[var(--launch-border)] bg-[var(--launch-surface)] px-3 py-2 text-[12px] font-medium text-[var(--launch-text)] shadow-lg"
+						onMouseEnter={handleHudMouseEnter}
+						onMouseLeave={handleHudMouseLeave}
+					>
+						{t("recording.windowCursorToast")}
+					</motion.div>
+				)}
+			</AnimatePresence>
 		</HudInteractionContext.Provider>
 	);
 }

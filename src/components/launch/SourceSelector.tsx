@@ -20,6 +20,8 @@ interface SourceSelectorProps {
 	screenSources?: DesktopSource[];
 	/** List of available window sources */
 	windowSources?: DesktopSource[];
+	/** Optional note rendered under the window entries (e.g. cursor warning) */
+	windowSourcesNote?: string;
 	/** Currently selected source name */
 	selectedSource?: string;
 	/** Loading state */
@@ -78,12 +80,18 @@ export function MarqueeText({ text }: { text: string }) {
 export const SourceSelectorContent = ({
 	screenSources = [],
 	windowSources = [],
+	windowSourcesNote,
 	selectedSource = "Screen",
 	loading = false,
 	onSourceSelect = () => undefined,
 }: Pick<
 	SourceSelectorProps,
-	"screenSources" | "windowSources" | "selectedSource" | "loading" | "onSourceSelect"
+	| "screenSources"
+	| "windowSources"
+	| "windowSourcesNote"
+	| "selectedSource"
+	| "loading"
+	| "onSourceSelect"
 >) => {
 	const t = useScopedT("launch");
 	const renderSourceItem = (source: DesktopSource, index: number) => {
@@ -177,6 +185,11 @@ export const SourceSelectorContent = ({
 									renderSourceItem(source, index),
 								)}
 							</div>
+							{windowSourcesNote ? (
+								<div className="px-3 pb-1 pt-1.5 text-[10px] leading-snug source-selector-muted">
+									{windowSourcesNote}
+								</div>
+							) : null}
 						</div>
 					) : null}
 				</>
@@ -196,6 +209,7 @@ export const SourceSelectorContent = ({
 export const SourceSelector = React.memo(function SourceSelector({
 	screenSources: propsScreenSources,
 	windowSources: propsWindowSources,
+	windowSourcesNote: propsWindowSourcesNote,
 	selectedSource: propsSelectedSource,
 	loading: propsLoading,
 	onSourceSelect: propsOnSourceSelect,
@@ -371,6 +385,7 @@ export const SourceSelector = React.memo(function SourceSelector({
 				<SourceSelectorContent
 					screenSources={screenSources}
 					windowSources={windowSources}
+					windowSourcesNote={propsWindowSourcesNote}
 					selectedSource={selectedSource}
 					loading={loading}
 					onSourceSelect={onSourceSelect}

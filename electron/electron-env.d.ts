@@ -884,6 +884,14 @@ interface Window {
 				| "no-libx264"
 				| "probe-failed";
 		}>;
+		getSourcePickerVisibility: () => Promise<{
+			show: boolean;
+			reason:
+				| "not-linux"
+				| "wayland-session"
+				| "portal-screencast"
+				| "no-portal-screencast";
+		}>;
 		muxNativeWindowsRecording: (expectedDurationMs?: number) => Promise<{
 			success: boolean;
 			path?: string;
