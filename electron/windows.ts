@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain } from "electron";
 import { USER_DATA_PATH } from "./appPaths";
 import {
+	clampHudDragToWorkArea,
 	getHudOverlayWindowBounds,
 	NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP,
 	resizeHudOverlayFallbackBounds,
@@ -52,6 +53,7 @@ const hudShapeCapable =
 	typeof BrowserWindow.prototype.setShape === "function";
 let hudShapeModeActive = hudShapeCapable;
 let hudLastShapeKey = "";
+let hudLastBarRect: HudShapeRect | null = null;
 let countdownWindow: BrowserWindow | null = null;
 let updateToastWindow: BrowserWindow | null = null;
 let hudWasVisibleBeforeUpdateToast = false;
@@ -333,6 +335,9 @@ ipcMain.on(
 			return;
 		}
 		const bounds = hudOverlayWindow.getBounds();
+		if (shape?.bar && shape.bar.width > 0 && shape.bar.height > 0) {
+			hudLastBarRect = shape.bar;
+		}
 		const rects = buildHudWindowShape({
 			windowSize: { width: bounds.width, height: bounds.height },
 			bar: shape?.bar ?? { x: 0, y: 0, width: 0, height: 0 },
@@ -379,13 +384,15 @@ let hudDragFixedSize: { width: number; height: number } | null = null;
 ipcMain.on("hud-overlay-drag", (_event, phase: string, screenX: number, screenY: number) => {
 	if (!hudOverlayWindow || hudOverlayWindow.isDestroyed()) return;
 
-	// On Linux the compositor (especially Wayland) refuses programmatic window
-	// placement, so BrowserWindow.setBounds() with x/y is silently ignored and
-	// the HUD appears "stuck".  The renderer marks the drag handle as
-	// -webkit-app-region: drag on Linux, letting the OS move the window for us.
-	// The resulting position is captured by the win.on("moved", ...) listener
-	// below so `hudUserPosition` stays in sync.
-	if (process.platform === "linux") {
+	// On Linux, programmatic placement is only reliable for X clients — which
+	// shape mode is by definition. There we drag via setBounds with a
+	// BAR-AWARE clamp: the window is a tall rectangle with the bar anchored
+	// inside it, so the WM's window-level clamp would happily push the bar
+	// off-screen. Native-Wayland Electron keeps the OS drag (the compositor
+	// really does refuse setBounds there); the renderer marks the handle as
+	// -webkit-app-region: drag and the win.on("moved", ...) listener below
+	// keeps `hudUserPosition` in sync.
+	if (process.platform === "linux" && !hudShapeModeActive) {
 		return;
 	}
 
@@ -408,10 +415,31 @@ ipcMain.on("hud-overlay-drag", (_event, phase: string, screenX: number, screenY:
 		const targetY = Math.round(screenY - hudDragOffset.y);
 		const fixedWidth = hudDragFixedSize?.width ?? hudOverlayWindow.getBounds().width;
 		const fixedHeight = hudDragFixedSize?.height ?? hudOverlayWindow.getBounds().height;
+		let nextX = targetX;
+		let nextY = targetY;
+		if (process.platform === "linux") {
+			// Keep the bar — not the window — inside the work area.
+			const bounds = hudOverlayWindow.getBounds();
+			const barRect =
+				hudLastBarRect ??
+				{
+					x: 0,
+					y: bounds.height - NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP,
+					width: bounds.width,
+					height: NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP,
+				};
+			const clamped = clampHudDragToWorkArea(
+				getHudOverlayDisplay().workArea,
+				{ x: nextX, y: nextY },
+				barRect,
+			);
+			nextX = clamped.x;
+			nextY = clamped.y;
+		}
 		hudOverlayWindow.setBounds(
 			{
-				x: targetX,
-				y: targetY,
+				x: nextX,
+				y: nextY,
 				width: fixedWidth,
 				height: fixedHeight,
 			},

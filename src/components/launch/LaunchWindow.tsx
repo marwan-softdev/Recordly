@@ -188,6 +188,7 @@ function LaunchWindowContent() {
 		hudContentRef,
 		hudBarRef,
 		recordingWebcamPreviewContainerRef,
+		windowDrag: hudShapeSupported,
 	});
 
 	const { handleHudMouseEnter, handleHudMouseLeave, beginInteractiveHudAction } =
@@ -476,8 +477,12 @@ function LaunchWindowContent() {
 	);
 
 	const hudMode = finalizing ? "finalizing" : recording ? "recording" : "idle";
+	// Native (OS) drag on Linux without shape mode and on non-passthrough
+	// fallbacks; shape-mode Linux takes the JS window drag instead — the WM's
+	// window-level clamp doesn't know the bar sits in the bottom of a tall
+	// window and would let it be dragged off-screen.
 	const useNativeHudBarDrag =
-		platform === "linux" || hudOverlayMousePassthroughSupported === false;
+		hudOverlayMousePassthroughSupported === false && !hudShapeSupported;
 	const shouldAnimateHudLayout = !recording && !showRecordingWebcamPreview && !isHudDragging;
 
 	return (
