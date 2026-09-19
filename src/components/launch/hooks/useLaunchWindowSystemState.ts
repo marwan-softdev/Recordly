@@ -9,6 +9,10 @@ export function useLaunchWindowSystemState(
 	const [platform, setPlatform] = useState<string | null>(null);
 	// Hidden until known so the picker never flashes on Linux portal sessions.
 	const [showSourcePicker, setShowSourcePicker] = useState(false);
+	// X clients with setShape: the window is a constant tall rectangle whose
+	// paint+input is clipped to the reported content rects. Native Wayland
+	// keeps the legacy fixed-size window.
+	const [hudShapeSupported, setHudShapeSupported] = useState(false);
 
 	useEffect(() => {
 		window.electronAPI?.hudOverlayRendererReady?.();
@@ -50,6 +54,22 @@ export function useLaunchWindowSystemState(
 
 	useEffect(() => {
 		let cancelled = false;
+		const loadShapeMode = async () => {
+			try {
+				const result = await window.electronAPI.getHudOverlayShapeMode();
+				if (!cancelled) setHudShapeSupported(Boolean(result.supported));
+			} catch (error) {
+				console.error("Failed to load HUD shape mode:", error);
+			}
+		};
+		void loadShapeMode();
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	useEffect(() => {
+		let cancelled = false;
 		const loadSupport = async () => {
 			try {
 				const result = await window.electronAPI.getHudOverlayMousePassthroughSupported();
@@ -70,5 +90,10 @@ export function useLaunchWindowSystemState(
 		void preparePermissions({ startup: true });
 	}, [preparePermissions]);
 
-	return { hudOverlayMousePassthroughSupported, platform, showSourcePicker };
+	return {
+		hudOverlayMousePassthroughSupported,
+		platform,
+		showSourcePicker,
+		hudShapeSupported,
+	};
 }
