@@ -6,10 +6,17 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import { USER_DATA_PATH } from "./appPaths";
 import {
 	getHudOverlayWindowBounds,
+	NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP,
 	resizeHudOverlayFallbackBounds,
 	shouldExpandHudOverlayFallback,
 } from "./hudOverlayBounds";
 import { getHudOverlayTaskbarOptions } from "./hudOverlayWindowOptions";
+import { isXClientWindowing } from "./hudSizing";
+import {
+	buildHudWindowShape,
+	shapeKey,
+	type HudShapeRect,
+} from "./hudOverlayShape";
 import { getPackagedRendererBaseUrl } from "./rendererServer";
 
 const electronWindowsDir = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +42,16 @@ let hudOverlaySourceSelectionActive = false;
 let hudOverlayMouseReassertTimer: NodeJS.Timeout | null = null;
 let hudOverlayRecordingActive = false;
 let hudOverlayWebcamPreviewVisible = false;
+// X clients (X11/XWayland): the HUD window stays a constant tall rectangle
+// and the X11 shape extension clips painting AND input to the reported
+// content rects (bar, open popover) — no clipping, no dead click zones.
+// Native-Wayland Electron and platforms without setShape keep the legacy
+// fixed-size window, byte for byte.
+const hudShapeCapable =
+	isXClientWindowing(process.env, process.platform, process.argv) &&
+	typeof BrowserWindow.prototype.setShape === "function";
+let hudShapeModeActive = hudShapeCapable;
+let hudLastShapeKey = "";
 let countdownWindow: BrowserWindow | null = null;
 let updateToastWindow: BrowserWindow | null = null;
 let hudWasVisibleBeforeUpdateToast = false;
@@ -177,7 +194,7 @@ function getHudOverlayDisplay() {
 
 function getHudOverlayBounds() {
 	const { workArea } = getHudOverlayDisplay();
-	const fallbackExpanded = shouldExpandHudOverlayFallback({
+	const fallbackExpanded = hudShapeModeActive || shouldExpandHudOverlayFallback({
 		fallbackExpanded: hudOverlayFallbackExpanded,
 		recordingActive: hudOverlayRecordingActive,
 		webcamPreviewVisible: hudOverlayWebcamPreviewVisible,
@@ -301,6 +318,42 @@ function setHudOverlayMousePassthrough(ignore: boolean) {
 
 	hudOverlayWindow.setIgnoreMouseEvents(false);
 }
+
+ipcMain.handle("get-hud-overlay-shape-mode", () => {
+	return { supported: hudShapeModeActive };
+});
+
+ipcMain.on(
+	"hud-overlay-set-content-shape",
+	(
+		_event,
+		shape: { bar?: HudShapeRect | null; popover?: HudShapeRect | null } | null,
+	) => {
+		if (!hudShapeModeActive || !hudOverlayWindow || hudOverlayWindow.isDestroyed()) {
+			return;
+		}
+		const bounds = hudOverlayWindow.getBounds();
+		const rects = buildHudWindowShape({
+			windowSize: { width: bounds.width, height: bounds.height },
+			bar: shape?.bar ?? { x: 0, y: 0, width: 0, height: 0 },
+			popover: shape?.popover ?? null,
+		});
+		const key = shapeKey(rects);
+		if (key === hudLastShapeKey) {
+			return;
+		}
+		hudLastShapeKey = key;
+		try {
+			if (rects.length > 0) {
+				hudOverlayWindow.setShape(rects);
+			}
+		} catch (error) {
+			// Shape support is best-effort; a failure here leaves the window
+			// rectangular (legacy footprint minus the constant height).
+			console.warn("[hud-shape] setShape failed:", error);
+		}
+	},
+);
 
 ipcMain.on("hud-overlay-set-ignore-mouse", (_event, ignore: boolean) => {
 	setHudOverlayMousePassthrough(Boolean(ignore));
@@ -442,6 +495,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 		frame: false,
 		transparent: true,
 		backgroundColor: "#00000000",
+		useContentSize: true,
 		resizable: false,
 		alwaysOnTop: true,
 		// The HUD is Recordly's persistent top-level window, so it owns the
@@ -556,6 +610,37 @@ export function createHudOverlayWindow(): BrowserWindow {
 	ipcMain.on("hud-overlay-renderer-ready", handleHudRendererReady);
 
 	hudOverlayWindow = win;
+
+	if (hudShapeModeActive) {
+		// Until the renderer reports the real bar rect, shape the window to its
+		// bottom strip — the same footprint as the legacy compact window — so
+		// the popover headroom never blocks clicks, not even briefly. If the
+		// platform rejects setShape after all, fall back to the legacy window.
+		try {
+			const size = win.getBounds();
+			win.setShape([
+				{
+					x: 0,
+					y: Math.max(0, size.height - NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP),
+					width: size.width,
+					height: NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP,
+				},
+			]);
+			hudLastShapeKey = shapeKey([
+				{
+					x: 0,
+					y: Math.max(0, size.height - NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP),
+					width: size.width,
+					height: NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP,
+				},
+			]);
+		} catch (error) {
+			hudShapeModeActive = false;
+			hudLastShapeKey = "";
+			console.warn("[hud-shape] setShape unavailable, keeping legacy window:", error);
+			applyHudOverlayBounds();
+		}
+	}
 
 	// On Linux the HUD is dragged by the OS via -webkit-app-region (Wayland
 	// forbids client-side positioning). Mirror moved bounds into drag state.

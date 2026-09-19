@@ -191,6 +191,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	getHudOverlayMousePassthroughSupported: () => {
 		return ipcRenderer.invoke("get-hud-overlay-mouse-passthrough-supported");
 	},
+	getHudOverlayShapeMode: () => {
+		return ipcRenderer.invoke("get-hud-overlay-shape-mode");
+	},
+	hudOverlaySetContentShape: (shape: {
+		bar: { x: number; y: number; width: number; height: number };
+		popover: { x: number; y: number; width: number; height: number } | null;
+	}) => {
+		ipcRenderer.send("hud-overlay-set-content-shape", shape);
+	},
 	setHudOverlayCaptureProtection: (enabled: boolean) => {
 		return ipcRenderer.invoke("set-hud-overlay-capture-protection", enabled);
 	},

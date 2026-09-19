@@ -24,6 +24,8 @@ import { HudInteractionContext } from "./contexts/HudInteractionContext";
 import { canToggleFloatingWebcamPreview } from "./floatingWebcamPreview";
 import { useHudBarDrag } from "./hooks/useHudBarDrag";
 import { useLaunchHudInteractionState } from "./hooks/useLaunchHudInteractionState";
+import { useHudContentShapeReporting } from "./hooks/useHudContentShapeReporting";
+import { setHudShapeMode } from "./hudShapeMode";
 import { useLaunchWindowActions } from "./hooks/useLaunchWindowActions";
 import { useLaunchWindowSystemState } from "./hooks/useLaunchWindowSystemState";
 import { useRecordingTimer } from "./hooks/useRecordingTimer";
@@ -111,11 +113,21 @@ function LaunchWindowContent() {
 		hudOverlayMousePassthroughSupported,
 		platform,
 		showSourcePicker,
+		hudShapeSupported,
 		appVersion,
 		hideHudFromCapture,
 		chooseRecordingsDirectory,
 		toggleHudCaptureProtection,
 	} = useLaunchWindowSystemState(preparePermissions);
+
+	useEffect(() => {
+		setHudShapeMode(hudShapeSupported);
+	}, [hudShapeSupported]);
+	useHudContentShapeReporting({
+		enabled: hudShapeSupported,
+		contentRef: hudContentRef,
+		openId,
+	});
 
 	const supportsHudCaptureProtection = platform !== "linux";
 
