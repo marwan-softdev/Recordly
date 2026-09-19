@@ -65,3 +65,25 @@ export function resizeHudOverlayFallbackBounds(
 		y: clamp(currentBounds.y + currentBounds.height - nextBounds.height, workArea.y, maxY),
 	};
 }
+
+/**
+ * Bar-aware drag clamp for shape-mode Linux dragging: the window is a tall
+ * rectangle with the bar anchored somewhere inside it (bottom in practice),
+ * so the window-manager's window-level reachability clamp does not keep the
+ * bar on screen. Constrains the dragged window position so the bar's rect
+ * (window-relative) always stays fully inside the work area.
+ */
+export function clampHudDragToWorkArea(
+	workArea: HudOverlayWorkArea,
+	position: { x: number; y: number },
+	barRect: { x: number; y: number; width: number; height: number },
+): { x: number; y: number } {
+	const minX = workArea.x - barRect.x;
+	const maxX = workArea.x + workArea.width - barRect.x - barRect.width;
+	const minY = workArea.y - barRect.y;
+	const maxY = workArea.y + workArea.height - barRect.y - barRect.height;
+	return {
+		x: Math.min(Math.max(position.x, minX), Math.max(minX, maxX)),
+		y: Math.min(Math.max(position.y, minY), Math.max(minY, maxY)),
+	};
+}
