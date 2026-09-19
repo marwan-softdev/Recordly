@@ -6,7 +6,7 @@ export interface HudOverlayWorkArea {
 }
 
 const NON_PASSTHROUGH_HUD_WIDTH_DIP = 860;
-const NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP = 160;
+export const NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP = 160;
 const NON_PASSTHROUGH_HUD_EXPANDED_HEIGHT_DIP = 540;
 
 function clamp(value: number, min: number, max: number): number {
