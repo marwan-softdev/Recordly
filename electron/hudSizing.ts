@@ -20,14 +20,19 @@ export type HudSizingEnv = Record<string, string | string[] | undefined>;
 /**
  * True when Electron's windows are driven by an X server — native X11 or
  * XWayland — where programmatic setBounds positioning is exact and the HUD
- * window can be resized to exactly its content. False for native-Wayland
- * Electron, which keeps the legacy fixed-size window (compositors there
- * refuse client-side positioning).
+ * window can use the shape extension. False for native-Wayland Electron,
+ * which uses the grow-downward mode instead (compositors there refuse
+ * client-side positioning but pin the top-left on resize).
  *
- * A Wayland *session* alone is not enough to answer "no": Electron only runs
- * native Wayland when asked (ELECTRON_OZONE_PLATFORM_HINT=wayland/auto, or an
- * explicit --ozone-platform=wayland). Everything else — plain X11 sessions
- * and XWayland-under-hint-auto-with-X11-fallback — lands on the X11 backend.
+ * EMPirical rule (learned on Cinnamon Wayland, commit history): when a
+ * Wayland display is reachable, Electron runs native Wayland even with no
+ * ozone hint and DISPLAY set — the old "no hint means X11/XWayland"
+ * assumption produced a shape-mode window whose setShape/setBounds tricks
+ * silently do nothing on Wayland. So a reachable Wayland display means
+ * grow, and shape is for sessions where Wayland does not exist at all
+ * (unless the user explicitly steered to X11 via hint=x11 or
+ * --ozone-platform=x11). Grow mode degrades gracefully if Electron still
+ * ends up on X11: its setBounds resizing works there too.
  */
 export function isXClientWindowing(
 	env: HudSizingEnv,
@@ -40,17 +45,18 @@ export function isXClientWindowing(
 	if (argv.some((arg) => arg.includes("ozone-platform=wayland"))) {
 		return false;
 	}
+	const waylandDisplay =
+		typeof env.WAYLAND_DISPLAY === "string" && env.WAYLAND_DISPLAY.trim().length > 0;
 	const sessionType = typeof env.XDG_SESSION_TYPE === "string" ? env.XDG_SESSION_TYPE : "";
-	if (sessionType !== "wayland") {
-		return typeof env.DISPLAY === "string" && env.DISPLAY.trim().length > 0;
-	}
+	const waylandReachable = waylandDisplay || sessionType === "wayland";
 	const hint = typeof env.ELECTRON_OZONE_PLATFORM_HINT === "string" ? env.ELECTRON_OZONE_PLATFORM_HINT : "";
-	if (hint === "wayland" || hint === "auto") {
+	if (hint === "x11" || argv.some((arg) => arg.includes("ozone-platform=x11"))) {
+		return true;
+	}
+	if (waylandReachable) {
 		return false;
 	}
-	// Wayland session but Electron steered to X11 (hint=x11, unset, or an
-	// explicit --ozone-platform=x11) → it is an X client (XWayland).
-	return true;
+	return typeof env.DISPLAY === "string" && env.DISPLAY.trim().length > 0;
 }
 
 export type HudWindowMode = "legacy" | "shape" | "grow";
