@@ -25,7 +25,8 @@ import { canToggleFloatingWebcamPreview } from "./floatingWebcamPreview";
 import { useHudBarDrag } from "./hooks/useHudBarDrag";
 import { useLaunchHudInteractionState } from "./hooks/useLaunchHudInteractionState";
 import { useHudContentShapeReporting } from "./hooks/useHudContentShapeReporting";
-import { setHudShapeMode } from "./hudShapeMode";
+import { useHudGrowSizeReporting } from "./hooks/useHudGrowSizeReporting";
+import { setHudWindowLayoutMode } from "./hudWindowMode";
 import { useLaunchWindowActions } from "./hooks/useLaunchWindowActions";
 import { useLaunchWindowSystemState } from "./hooks/useLaunchWindowSystemState";
 import { useRecordingTimer } from "./hooks/useRecordingTimer";
@@ -97,14 +98,19 @@ function LaunchWindowContent() {
 		setSelectedDeviceId: setSelectedVideoDeviceId,
 	} = useVideoDevices(webcamEnabled || openId === "webcam");
 
-	const { hudOverlayMousePassthroughSupported, platform, showSourcePicker, hudShapeSupported } =
+	const { hudOverlayMousePassthroughSupported, platform, showSourcePicker, hudWindowMode } =
 		useLaunchWindowSystemState(preparePermissions);
 
 	useEffect(() => {
-		setHudShapeMode(hudShapeSupported);
-	}, [hudShapeSupported]);
+		setHudWindowLayoutMode(hudWindowMode);
+	}, [hudWindowMode]);
 	useHudContentShapeReporting({
-		enabled: hudShapeSupported,
+		enabled: hudWindowMode === "shape",
+		contentRef: hudContentRef,
+		openId,
+	});
+	useHudGrowSizeReporting({
+		enabled: hudWindowMode === "grow",
 		contentRef: hudContentRef,
 		openId,
 	});
@@ -166,7 +172,7 @@ function LaunchWindowContent() {
 		hudContentRef,
 		hudBarRef,
 		recordingWebcamPreviewContainerRef,
-		windowDrag: hudShapeSupported,
+		windowDrag: hudWindowMode === "shape",
 	});
 
 	const { handleHudMouseEnter, handleHudMouseLeave, beginInteractiveHudAction } =
@@ -456,20 +462,28 @@ function LaunchWindowContent() {
 	// window-level clamp doesn't know the bar sits in the bottom of a tall
 	// window and would let it be dragged off-screen.
 	const useNativeHudBarDrag =
-		hudOverlayMousePassthroughSupported === false && !hudShapeSupported;
+		hudOverlayMousePassthroughSupported === false && hudWindowMode !== "shape";
 	const shouldAnimateHudLayout = !recording && !showRecordingWebcamPreview && !isHudDragging;
+	// Grow mode (native Wayland) anchors the bar to the window's TOP and the
+	// column flows downward — the compositor pins the window's top-left on
+	// resize, so growing for a menu keeps the bar exactly where it was.
+	const growLayout = hudWindowMode === "grow";
 
 	return (
 		<HudInteractionContext.Provider
 			value={{ onMouseEnter: handleHudMouseEnter, onMouseLeave: handleHudMouseLeave }}
 		>
 			<div
-				className="w-full flex justify-center bg-transparent overflow-visible items-end pb-5 pointer-events-none"
+				className={`w-full flex justify-center bg-transparent overflow-visible pointer-events-none ${
+					growLayout ? "items-start pt-5" : "items-end pb-5"
+				}`}
 				style={{ height: "100vh" }}
 			>
 				<div
 					ref={hudContentRef}
-					className="flex items-center overflow-visible flex-col-reverse pointer-events-none"
+					className={`flex items-center overflow-visible pointer-events-none ${
+						growLayout ? "flex-col" : "flex-col-reverse"
+					}`}
 				>
 					<div className="flex flex-col items-center pointer-events-none p-2">
 						<div

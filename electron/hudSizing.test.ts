@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isXClientWindowing } from "./hudSizing";
+import { isXClientWindowing, resolveHudWindowMode } from "./hudSizing";
 
 describe("isXClientWindowing", () => {
 	it("is false off Linux", () => {
@@ -51,5 +51,41 @@ describe("isXClientWindowing", () => {
 		expect(
 			isXClientWindowing(wayland, "linux", ["--ozone-platform=wayland"]),
 		).toBe(false);
+	});
+});
+
+describe("resolveHudWindowMode", () => {
+	const x11 = { XDG_SESSION_TYPE: "x11", DISPLAY: ":0" };
+	const wayland = {
+		XDG_SESSION_TYPE: "wayland",
+		WAYLAND_DISPLAY: "wayland-0",
+		ELECTRON_OZONE_PLATFORM_HINT: "wayland",
+	};
+
+	it("picks shape for X clients and grow for native Wayland", () => {
+		expect(resolveHudWindowMode(x11, "linux")).toBe("shape");
+		expect(resolveHudWindowMode(wayland, "linux")).toBe("grow");
+		expect(
+			resolveHudWindowMode(
+				{ XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
+				"linux",
+			),
+		).toBe("shape"); // XWayland
+	});
+
+	it("is legacy off Linux", () => {
+		expect(resolveHudWindowMode({ DISPLAY: ":0" }, "win32")).toBe("legacy");
+	});
+
+	it("lets the dev-only env override force any mode", () => {
+		expect(
+			resolveHudWindowMode({ ...x11, RECORDLY_FORCE_HUD_WINDOW_MODE: "grow" }, "linux"),
+		).toBe("grow");
+		expect(
+			resolveHudWindowMode({ ...wayland, RECORDLY_FORCE_HUD_WINDOW_MODE: "shape" }, "linux"),
+		).toBe("shape");
+		expect(
+			resolveHudWindowMode({ ...x11, RECORDLY_FORCE_HUD_WINDOW_MODE: "bogus" }, "linux"),
+		).toBe("shape"); // invalid values are ignored
 	});
 });
