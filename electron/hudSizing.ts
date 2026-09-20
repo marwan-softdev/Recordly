@@ -52,3 +52,33 @@ export function isXClientWindowing(
 	// explicit --ozone-platform=x11) → it is an X client (XWayland).
 	return true;
 }
+
+export type HudWindowMode = "legacy" | "shape" | "grow";
+
+/**
+ * Which sizing strategy the HUD window uses:
+ * - "shape": X clients — constant tall window, X11 shape extension carves
+ *   paint+input to the content rects (see electron/hudOverlayShape.ts).
+ * - "grow": native-Wayland Electron (anything Linux that is not an X client)
+ *   — the compositor owns placement but pins the top-left corner on resizes,
+ *   so the bar is anchored to the window's TOP and opening a popover grows
+ *   the window downward. Idle rectangle hugs the bar; menus appear below it.
+ * - "legacy": everything else — today's fixed 860x160 window, unchanged.
+ *
+ * RECORDLY_FORCE_HUD_WINDOW_MODE=shape|grow|legacy overrides for testing a
+ * mode on a machine that wouldn't get it natively (dev-only escape hatch).
+ */
+export function resolveHudWindowMode(
+	env: HudSizingEnv,
+	platform: NodeJS.Platform,
+	argv: string[] = [],
+): HudWindowMode {
+	const forced = env.RECORDLY_FORCE_HUD_WINDOW_MODE;
+	if (forced === "shape" || forced === "grow" || forced === "legacy") {
+		return forced;
+	}
+	if (platform !== "linux") {
+		return "legacy";
+	}
+	return isXClientWindowing(env, platform, argv) ? "shape" : "grow";
+}
