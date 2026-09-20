@@ -87,6 +87,16 @@ describe("resolveSourcePickerVisibility", () => {
 		).toEqual({ show: false, reason: "wayland-session" });
 	});
 
+	it("reports wayland-no-portal on Wayland without a ScreenCast portal (Cinnamon/muffin)", () => {
+		expect(
+			resolveSourcePickerVisibility({
+				platform: "linux",
+				env: wayland,
+				portalScreenCastSupported: false,
+			}),
+		).toEqual({ show: false, reason: "wayland-no-portal" });
+	});
+
 	it("hides the picker on X11 when the portal has ScreenCast (GNOME/KDE)", () => {
 		expect(
 			resolveSourcePickerVisibility({
