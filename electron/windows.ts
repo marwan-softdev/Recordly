@@ -374,9 +374,6 @@ ipcMain.on("hud-overlay-set-popover-open", (_event, open: boolean) => {
 	// the bar cannot jump.
 	const workArea = getHudOverlayDisplay().workArea;
 	const bounds = hudOverlayWindow.getBounds();
-	// setBounds (not setSize): the window is resizable:false, which setSize
-	// refuses; keeping x/y is exactly the grow semantics anyway (X11 pins the
-	// top-left, Wayland ignores x/y and its compositor pins it for us).
 	hudOverlayWindow.setBounds(
 		{
 			x: bounds.x,
