@@ -17,13 +17,17 @@ describe("isXClientWindowing", () => {
 		expect(isXClientWindowing({ XDG_SESSION_TYPE: "x11" }, "linux")).toBe(false);
 	});
 
-	it("is true for XWayland: wayland session, X11-steered Electron", () => {
+	it("is true for a Wayland session only when explicitly steered to X11", () => {
+		// When a Wayland display is reachable, Electron runs native Wayland
+		// even with no hint and DISPLAY set (verified on Cinnamon Wayland:
+		// the app had no X window at all). Only an explicit X11 steer makes
+		// it an X client there.
 		expect(
 			isXClientWindowing(
 				{ XDG_SESSION_TYPE: "wayland", WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0" },
 				"linux",
 			),
-		).toBe(true);
+		).toBe(false);
 		expect(
 			isXClientWindowing(
 				{
@@ -34,14 +38,18 @@ describe("isXClientWindowing", () => {
 				"linux",
 			),
 		).toBe(true);
+		expect(
+			isXClientWindowing(
+				{ XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
+				"linux",
+				["--ozone-platform=x11"],
+			),
+		).toBe(true);
 	});
 
 	it("is false for native-Wayland Electron", () => {
 		const wayland = { XDG_SESSION_TYPE: "wayland", WAYLAND_DISPLAY: "wayland-0" };
-		// Stock Electron (no hint) runs the X11 backend via XWayland even on a
-		// Wayland session — only wayland/auto hints (or an explicit
-		// --ozone-platform=wayland) put it on native Wayland.
-		expect(isXClientWindowing(wayland, "linux")).toBe(true);
+		expect(isXClientWindowing(wayland, "linux")).toBe(false);
 		expect(
 			isXClientWindowing({ ...wayland, ELECTRON_OZONE_PLATFORM_HINT: "auto" }, "linux"),
 		).toBe(false);
@@ -65,12 +73,14 @@ describe("resolveHudWindowMode", () => {
 	it("picks shape for X clients and grow for native Wayland", () => {
 		expect(resolveHudWindowMode(x11, "linux")).toBe("shape");
 		expect(resolveHudWindowMode(wayland, "linux")).toBe("grow");
+		// Wayland display reachable → grow, even with DISPLAY set (grow works
+		// on X11 too if Electron ended up there via an explicit steer).
 		expect(
 			resolveHudWindowMode(
 				{ XDG_SESSION_TYPE: "wayland", DISPLAY: ":0" },
 				"linux",
 			),
-		).toBe("shape"); // XWayland
+		).toBe("grow");
 	});
 
 	it("is legacy off Linux", () => {
