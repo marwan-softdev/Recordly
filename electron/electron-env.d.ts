@@ -1009,11 +1009,12 @@ interface Window {
 		}>;
 		getSourcePickerVisibility: () => Promise<{
 			show: boolean;
-			reason:
-				| "not-linux"
-				| "wayland-session"
-				| "portal-screencast"
-				| "no-portal-screencast";
+				reason:
+					| "not-linux"
+					| "wayland-session"
+					| "wayland-no-portal"
+					| "portal-screencast"
+					| "no-portal-screencast";
 		}>;
 		muxNativeWindowsRecording: (expectedDurationMs?: number) => Promise<{
 			success: boolean;

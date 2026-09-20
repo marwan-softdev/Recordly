@@ -94,6 +94,7 @@ function getPortalScreenCastSupport(): Promise<boolean> {
 export type SourcePickerVisibilityReason =
 	| "not-linux"
 	| "wayland-session"
+	| "wayland-no-portal"
 	| "portal-screencast"
 	| "no-portal-screencast";
 
@@ -105,7 +106,12 @@ export type SourcePickerVisibility = {
 /**
  * The single rule for Recordly's own Screen/Window picker:
  * - non-Linux: always shown (unchanged behavior)
- * - Linux + Wayland: never shown (portal is the only capture path)
+ * - Linux + Wayland with a ScreenCast portal: never shown (portal is the
+ *   only capture path)
+ * - Linux + Wayland without a ScreenCast portal (e.g. Cinnamon/muffin):
+ *   never shown — no capture path exists at all, and the renderer uses this
+ *   reason to tell the user to switch to an X11 session instead of letting
+ *   getDisplayMedia fail with a cryptic error
  * - Linux + X11 + portal has ScreenCast: hidden (system dialog works —
  *   GNOME/KDE keep today's behavior)
  * - Linux + X11 without portal ScreenCast (or failed probe): shown — the
@@ -121,7 +127,9 @@ export function resolveSourcePickerVisibility(options: {
 	}
 	const env = options.env ?? process.env;
 	if (!isX11CaptureSession(env)) {
-		return { show: false, reason: "wayland-session" };
+		return options.portalScreenCastSupported
+			? { show: false, reason: "wayland-session" }
+			: { show: false, reason: "wayland-no-portal" };
 	}
 	return options.portalScreenCastSupported
 		? { show: false, reason: "portal-screencast" }

@@ -256,6 +256,24 @@ export function describeNativeLinuxCaptureUnavailable(
 }
 
 /**
+ * Recording is impossible on a Wayland session without the ScreenCast
+ * portal (e.g. Cinnamon/muffin): native x11grab is Wayland-gated off and
+ * browser capture has no portal to ask. Instead of letting getDisplayMedia
+ * fail with a cryptic Chromium error, the caller checks this up front and
+ * tells the user to log into an X11 session.
+ */
+export const WAYLAND_NO_PORTAL_RECORDING_MESSAGE =
+	"Screen recording isn't available in this session. This desktop runs Wayland without the screen-sharing service (ScreenCast portal) that recording needs, and native capture only works on X11. Please log out and pick an X11 session (for example \"Cinnamon (X11)\") on the login screen, then try again.";
+
+export function resolveWaylandNoPortalRecordingBlock(
+	visibility: { reason?: string } | null | undefined,
+): string | null {
+	return visibility?.reason === "wayland-no-portal"
+		? WAYLAND_NO_PORTAL_RECORDING_MESSAGE
+		: null;
+}
+
+/**
  * Anchors the video timeline's t=0 to the moment capture actually began.
  * Linux native capture reports the spawn instant from the main process; a
  * renderer-side Date.now() taken after the start IPC returns runs ~1s late,
@@ -1782,6 +1800,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		setStarting(true);
 
 		try {
+			// Wayland without a ScreenCast portal has no capture path at all —
+			// bail with a real explanation before the countdown or any capture
+			// attempt can fail cryptically.
+			const pickerVisibility =
+				await window.electronAPI?.getSourcePickerVisibility?.();
+			const waylandNoPortalBlock =
+				resolveWaylandNoPortalRecordingBlock(pickerVisibility);
+			if (waylandNoPortalBlock) {
+				alert(waylandNoPortalBlock);
+				return;
+			}
+
 			const preparedStart = await prepareRecordingStart();
 			if (!preparedStart || startWasCancelled()) {
 				cleanupCapturedMedia();
