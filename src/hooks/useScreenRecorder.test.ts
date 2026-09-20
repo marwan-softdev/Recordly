@@ -5,6 +5,7 @@ import {
 	createProcessedMicrophoneConstraints,
 	normalizeBrowserMicrophoneProfile,
 	resolveBrowserCaptureCursorPolicy,
+	resolveWaylandNoPortalRecordingBlock,
 	describeNativeLinuxCaptureUnavailable,
 	resolveVideoStartEpochMs,
 	shouldUseNativeWindowsCaptureForSource,
@@ -214,6 +215,24 @@ describe("describeNativeLinuxCaptureUnavailable", () => {
 
 	it("falls back to a generic message for unknown reasons", () => {
 		expect(describeNativeLinuxCaptureUnavailable(undefined)).toMatch(/unavailable/);
+	});
+});
+
+describe("resolveWaylandNoPortalRecordingBlock", () => {
+	it("returns the X11 guidance message when the portal is missing on Wayland", () => {
+		const message = resolveWaylandNoPortalRecordingBlock({
+			reason: "wayland-no-portal",
+		});
+		expect(message).toMatch(/Wayland/);
+		expect(message).toMatch(/X11 session/);
+	});
+
+	it("passes sessions with a working capture path through", () => {
+		expect(resolveWaylandNoPortalRecordingBlock({ reason: "wayland-session" })).toBeNull();
+		expect(resolveWaylandNoPortalRecordingBlock({ reason: "portal-screencast" })).toBeNull();
+		expect(resolveWaylandNoPortalRecordingBlock({ reason: "no-portal-screencast" })).toBeNull();
+		expect(resolveWaylandNoPortalRecordingBlock({ reason: "not-linux" })).toBeNull();
+		expect(resolveWaylandNoPortalRecordingBlock(undefined)).toBeNull();
 	});
 });
 
