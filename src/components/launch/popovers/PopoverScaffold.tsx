@@ -7,6 +7,7 @@ import styles from "../LaunchWindow.module.css";
 import "../launchTheme.css";
 import type { DeviceOption } from "./launchPopoverTypes";
 import { useHudInteraction } from "../contexts/HudInteractionContext";
+import { isHudGrowMode } from "../hudWindowMode";
 
 export function DropdownItem({
 	onClick,
@@ -77,6 +78,9 @@ export function HudPopover({
 	align?: "start" | "center" | "end";
 }) {
 	const { onMouseEnter } = useHudInteraction();
+	// Grow mode anchors the bar to the window's top: menus open downward into
+	// the space that opens below; every other mode opens upward as before.
+	const side = isHudGrowMode() ? "bottom" : "top";
 	return (
 		<Popover open={open} onOpenChange={onOpenChange} modal={false}>
 			<PopoverTrigger asChild>{trigger}</PopoverTrigger>
@@ -84,7 +88,7 @@ export function HudPopover({
 				className={`launch-theme ${styles.menuCard} ${styles.electronNoDrag}`}
 				data-hud-interactive
 				unstyled
-				side="top"
+				side={side}
 				align={align}
 				sideOffset={8}
 				avoidCollisions

@@ -209,7 +209,11 @@ interface Window {
 			success: boolean;
 			supported: boolean;
 		}>;
-		getHudOverlayShapeMode: () => Promise<{ supported: boolean }>;
+		getHudOverlayWindowMode: () => Promise<{
+			mode: "legacy" | "shape" | "grow";
+		}>;
+		hudOverlaySetContentSize: (size: { width: number; height: number }) => void;
+		hudOverlaySetPopoverOpen: (open: boolean) => void;
 		hudOverlaySetContentShape: (shape: {
 			bar: { x: number; y: number; width: number; height: number };
 			popover: { x: number; y: number; width: number; height: number } | null;

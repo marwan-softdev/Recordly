@@ -14,6 +14,7 @@ import {
 import "./launchTheme.css";
 import "./SourceSelector.css";
 import { useHudInteraction } from "./contexts/HudInteractionContext";
+import { isHudGrowMode } from "./hudWindowMode";
 
 interface SourceSelectorProps {
 	/** List of available screen sources */
@@ -366,6 +367,8 @@ export const SourceSelector = React.memo(function SourceSelector({
 	);
 
 	const { onMouseEnter } = useHudInteraction();
+	// Grow mode anchors the bar to the window's top: menus open downward.
+	const side = isHudGrowMode() ? "bottom" : "top";
 
 	return (
 		<Popover open={open} onOpenChange={onOpenChange} modal={false}>
@@ -375,7 +378,7 @@ export const SourceSelector = React.memo(function SourceSelector({
 				unstyled
 				align="start"
 				sideOffset={8}
-				side="top"
+				side={side}
 				alignOffset={-8}
 				avoidCollisions={true}
 				collisionPadding={10}

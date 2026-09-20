@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { HudWindowLayoutMode } from "../hudWindowMode";
 
 export function useLaunchWindowSystemState(
 	preparePermissions: (args: { startup?: boolean }) => Promise<unknown>,
@@ -10,10 +11,9 @@ export function useLaunchWindowSystemState(
 	const [platform, setPlatform] = useState<string | null>(null);
 	// Hidden until known so the picker never flashes on Linux portal sessions.
 	const [showSourcePicker, setShowSourcePicker] = useState(false);
-	// X clients with setShape: the window is a constant tall rectangle whose
-	// paint+input is clipped to the reported content rects. Native Wayland
-	// keeps the legacy fixed-size window.
-	const [hudShapeSupported, setHudShapeSupported] = useState(false);
+	// HUD window sizing mode: "shape" (X11 carving), "grow" (Wayland
+	// grow-downward, bar top-anchored), or "legacy" (fixed window).
+	const [hudWindowMode, setHudWindowMode] = useState<HudWindowLayoutMode>("legacy");
 	const [appVersion, setAppVersion] = useState<string | null>(null);
 	const [hideHudFromCapture, setHideHudFromCapture] = useState(true);
 
@@ -73,15 +73,17 @@ export function useLaunchWindowSystemState(
 
 	useEffect(() => {
 		let cancelled = false;
-		const loadShapeMode = async () => {
+		const loadWindowMode = async () => {
 			try {
-				const result = await window.electronAPI.getHudOverlayShapeMode();
-				if (!cancelled) setHudShapeSupported(Boolean(result.supported));
+				const result = await window.electronAPI.getHudOverlayWindowMode();
+				if (!cancelled && (result.mode === "shape" || result.mode === "grow" || result.mode === "legacy")) {
+					setHudWindowMode(result.mode);
+				}
 			} catch (error) {
-				console.error("Failed to load HUD shape mode:", error);
+				console.error("Failed to load HUD window mode:", error);
 			}
 		};
-		void loadShapeMode();
+		void loadWindowMode();
 		return () => {
 			cancelled = true;
 		};
@@ -174,7 +176,7 @@ export function useLaunchWindowSystemState(
 		hudOverlayMousePassthroughSupported,
 		platform,
 		showSourcePicker,
-		hudShapeSupported,
+		hudWindowMode,
 		appVersion,
 		hideHudFromCapture,
 		setHideHudFromCapture,
