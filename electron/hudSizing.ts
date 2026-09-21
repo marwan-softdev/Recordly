@@ -24,7 +24,7 @@ export type HudSizingEnv = Record<string, string | string[] | undefined>;
  * which uses the grow-downward mode instead (compositors there refuse
  * client-side positioning but pin the top-left on resize).
  *
- * EMPirical rule (learned on Cinnamon Wayland, commit history): when a
+	 * Empirical rule (learned on Cinnamon Wayland, commit history): when a
  * Wayland display is reachable, Electron runs native Wayland even with no
  * ozone hint and DISPLAY set — the old "no hint means X11/XWayland"
  * assumption produced a shape-mode window whose setShape/setBounds tricks

@@ -401,8 +401,8 @@ ipcMain.handle("get-hud-overlay-window-mode", () => {
 	return { mode: hudShapeModeActive ? "shape" : hudWindowMode };
 });
 
-ipcMain.on("hud-overlay-set-popover-open", (_event, open: boolean) => {
-	if (hudWindowMode !== "grow" || !open) {
+ipcMain.on("hud-overlay-pre-grow-popover", () => {
+	if (hudWindowMode !== "grow") {
 		return;
 	}
 	if (!hudOverlayWindow || hudOverlayWindow.isDestroyed()) {
@@ -806,22 +806,16 @@ export function createHudOverlayWindow(): BrowserWindow {
 		// platform rejects setShape after all, fall back to the legacy window.
 		try {
 			const size = win.getBounds();
-			win.setShape([
+			const initialShape: HudShapeRect[] = [
 				{
 					x: 0,
 					y: Math.max(0, size.height - NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP),
 					width: size.width,
 					height: NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP,
 				},
-			]);
-			hudLastShapeKey = shapeKey([
-				{
-					x: 0,
-					y: Math.max(0, size.height - NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP),
-					width: size.width,
-					height: NON_PASSTHROUGH_HUD_COMPACT_HEIGHT_DIP,
-				},
-			]);
+			];
+			win.setShape(initialShape);
+			hudLastShapeKey = shapeKey(initialShape);
 		} catch (error) {
 			hudShapeModeActive = false;
 			hudLastShapeKey = "";

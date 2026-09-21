@@ -13,14 +13,6 @@ export function setHudWindowLayoutMode(mode: HudWindowLayoutMode): void {
 	hudWindowLayoutMode = mode;
 }
 
-export function getHudWindowLayoutMode(): HudWindowLayoutMode {
-	return hudWindowLayoutMode;
-}
-
-export function isHudShapeMode(): boolean {
-	return hudWindowLayoutMode === "shape";
-}
-
 export function isHudGrowMode(): boolean {
 	return hudWindowLayoutMode === "grow";
 }

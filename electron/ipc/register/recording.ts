@@ -504,18 +504,13 @@ function applyLinuxCursorStartupLag(
 	resumeCursorCapture(calibration.segmentSpawnMs + lagMs);
 }
 
-function calibrateLinuxCursorStartup(chunk: string) {
+/**
+ * Applies a freshly measured startup lag: marks the calibration done, cancels
+ * the fallback timer, and corrects the cursor clock onto the video timeline.
+ */
+function finishLinuxCursorStartupCalibration(videoTimeMs: number) {
 	const calibration = linuxCursorStartupCalibration;
 	if (!calibration || calibration.calibrated) {
-		return;
-	}
-	const match =
-		chunk.match(/out_time_us=(-?\d+)/) ?? chunk.match(/out_time_ms=(-?\d+)/);
-	if (!match) {
-		return;
-	}
-	const videoTimeMs = Number(match[1]) / 1000;
-	if (!Number.isFinite(videoTimeMs) || videoTimeMs < 0) {
 		return;
 	}
 	calibration.calibrated = true;
@@ -527,6 +522,18 @@ function calibrateLinuxCursorStartup(chunk: string) {
 	);
 }
 
+function calibrateLinuxCursorStartup(chunk: string) {
+	const match =
+		chunk.match(/out_time_us=(-?\d+)/) ?? chunk.match(/out_time_ms=(-?\d+)/);
+	if (!match) {
+		return;
+	}
+	const videoTimeMs = Number(match[1]) / 1000;
+	if (Number.isFinite(videoTimeMs) && videoTimeMs >= 0) {
+		finishLinuxCursorStartupCalibration(videoTimeMs);
+	}
+}
+
 /**
  * Input-side calibration from showinfo's per-frame stderr log. Its first
  * `n: 0 pts_time:0` line fires when the first GRABBED frame enters the
@@ -534,25 +541,14 @@ function calibrateLinuxCursorStartup(chunk: string) {
  * measured lag is the true spawn→first-frame delay, free of encoder delay.
  */
 function calibrateLinuxCursorStartupFromFilterLog(line: string) {
-	const calibration = linuxCursorStartupCalibration;
-	if (!calibration || calibration.calibrated) {
-		return;
-	}
 	const match = line.match(/\bn:\s*\d+ pts:\s*-?\d+ pts_time:(\d+(?:\.\d+)?)/);
 	if (!match) {
 		return;
 	}
 	const videoTimeMs = Number.parseFloat(match[1]) * 1000;
-	if (!Number.isFinite(videoTimeMs) || videoTimeMs < 0) {
-		return;
+	if (Number.isFinite(videoTimeMs) && videoTimeMs >= 0) {
+		finishLinuxCursorStartupCalibration(videoTimeMs);
 	}
-	calibration.calibrated = true;
-	clearTimeout(calibration.fallbackTimer);
-	const rawLagMs = Date.now() - calibration.segmentSpawnMs - videoTimeMs;
-	applyLinuxCursorStartupLag(
-		calibration,
-		clampCalibrationLagMs(rawLagMs),
-	);
 }
 
 function armLinuxCursorStartupCalibration(
@@ -797,6 +793,36 @@ async function finalizeLinuxCaptureRecording(finalVideoPath: string) {
 	}
 
 	return finalVideoPath;
+}
+
+/**
+ * Brings every Linux capture state variable back to idle. The stop paths call
+ * this while keeping the recorded segments — finalize (or the stop-failure
+ * recovery below) still needs them; the start-failure path clears them
+ * because nothing was recorded yet.
+ */
+function resetLinuxCaptureState(options: { clearSegments?: boolean } = {}) {
+	setLinuxNativeCaptureActive(false);
+	setNativeScreenRecordingActive(false);
+	setLinuxCaptureProcess(null);
+	setLinuxCaptureSegmentPath(null);
+	setLinuxCaptureTargetPath(null);
+	setLinuxCaptureStopRequested(false);
+	setLinuxCapturePaused(false);
+	setLinuxCaptureVaapi(null);
+	setLinuxCaptureNvenc(null);
+	try {
+		linuxSystemAudioProcess?.kill();
+	} catch {
+		/* ignore */
+	}
+	setLinuxSystemAudioProcess(null);
+	setLinuxSystemAudioSegmentPath(null);
+	if (options.clearSegments) {
+		setLinuxCaptureSegments([]);
+		setLinuxSystemAudioSegments([]);
+		setLinuxSystemAudioSourceName(null);
+	}
 }
 
 /**
@@ -1130,7 +1156,7 @@ export function registerRecordingHandlers(
 					);
 
 					// Resolve the system-audio monitor source up front; when it is
-				// missing we still record video-only and let the renderer explain.
+					// missing we still record video-only and let the renderer explain.
 					let systemAudioUnavailable: LinuxSystemAudioUnavailableReason | null =
 						null;
 					if (options?.capturesSystemAudio) {
@@ -1184,7 +1210,7 @@ export function registerRecordingHandlers(
 							);
 						} else {
 							setLinuxCaptureVaapi(null);
-					setLinuxCaptureNvenc(null);
+							setLinuxCaptureNvenc(null);
 							// NVIDIA machines have no VAAPI — offer them NVENC
 							// before falling back to the CPU tier.
 							const nvenc = await getLinuxNvencCapture();
@@ -1247,26 +1273,8 @@ export function registerRecordingHandlers(
 					} catch {
 						/* ignore */
 					}
-					try {
-						linuxSystemAudioProcess?.kill();
-					} catch {
-						/* ignore */
-					}
 					const failedSegmentPath = linuxCaptureSegmentPath;
-					setLinuxNativeCaptureActive(false);
-					setNativeScreenRecordingActive(false);
-					setLinuxCaptureProcess(null);
-					setLinuxCaptureSegmentPath(null);
-					setLinuxCaptureSegments([]);
-					setLinuxCaptureTargetPath(null);
-					setLinuxCaptureStopRequested(false);
-					setLinuxCapturePaused(false);
-					setLinuxCaptureVaapi(null);
-					setLinuxCaptureNvenc(null);
-					setLinuxSystemAudioProcess(null);
-					setLinuxSystemAudioSourceName(null);
-					setLinuxSystemAudioSegmentPath(null);
-					setLinuxSystemAudioSegments([]);
+					resetLinuxCaptureState({ clearSegments: true });
 					if (failedSegmentPath) {
 						await fs.rm(failedSegmentPath, { force: true }).catch(() => undefined);
 					}
@@ -1775,21 +1783,7 @@ export function registerRecordingHandlers(
 						setLinuxCaptureSegmentPath(null);
 					}
 
-					setLinuxCaptureProcess(null);
-					setLinuxNativeCaptureActive(false);
-					setNativeScreenRecordingActive(false);
-					setLinuxCaptureTargetPath(null);
-					setLinuxCaptureStopRequested(false);
-					setLinuxCapturePaused(false);
-					setLinuxCaptureVaapi(null);
-					setLinuxCaptureNvenc(null);
-					try {
-						linuxSystemAudioProcess?.kill();
-					} catch {
-						/* ignore */
-					}
-					setLinuxSystemAudioProcess(null);
-					setLinuxSystemAudioSegmentPath(null);
+					resetLinuxCaptureState();
 
 					const stitchedPath = await finalizeLinuxCaptureRecording(finalVideoPath);
 
@@ -1805,22 +1799,7 @@ export function registerRecordingHandlers(
 					console.error("Failed to stop native Linux capture:", error);
 					const segments = linuxCaptureSegments;
 					const openSegmentPath = linuxCaptureSegmentPath;
-					setLinuxNativeCaptureActive(false);
-					setNativeScreenRecordingActive(false);
-					setLinuxCaptureProcess(null);
-					setLinuxCaptureSegmentPath(null);
-					setLinuxCaptureTargetPath(null);
-					setLinuxCaptureStopRequested(false);
-					setLinuxCapturePaused(false);
-					setLinuxCaptureVaapi(null);
-					setLinuxCaptureNvenc(null);
-					try {
-						linuxSystemAudioProcess?.kill();
-					} catch {
-						/* ignore */
-					}
-					setLinuxSystemAudioProcess(null);
-					setLinuxSystemAudioSegmentPath(null);
+					resetLinuxCaptureState();
 
 					recordNativeCaptureDiagnostics({
 						backend: "linux-x11grab",

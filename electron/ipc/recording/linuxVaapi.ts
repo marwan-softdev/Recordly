@@ -2,10 +2,13 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { promisify } from "node:util";
 import { resolveSystemFfmpegBinaryPath } from "../ffmpeg/binary";
+import {
+	FFMPEG_PROBE_TIMEOUT_MS,
+	listFfmpegDevices,
+	listFfmpegEncoders,
+} from "./ffmpegProbe";
 
 const execFileAsync = promisify(execFile);
-
-const FFMPEG_PROBE_TIMEOUT_MS = 10_000;
 
 export type LinuxVaapiUnavailableReason =
 	| "no-render-node"
@@ -124,28 +127,12 @@ export async function runLinuxVaapiProbe(
 
 const defaultDeps: LinuxVaapiProbeDeps = {
 	readdir: async (path) => (await fs.readdir(path)).map((entry) => entry.toString()),
-	listEncoders: async (ffmpegPath) =>
-		(
-			await execFileAsync(ffmpegPath, ["-hide_banner", "-encoders"], {
-				timeout: FFMPEG_PROBE_TIMEOUT_MS,
-				maxBuffer: 1024 * 1024,
-			})
-		).stdout,
-	listDevices: async (ffmpegPath) =>
-		(
-			await execFileAsync(ffmpegPath, ["-hide_banner", "-devices"], {
-				timeout: FFMPEG_PROBE_TIMEOUT_MS,
-				maxBuffer: 1024 * 1024,
-			})
-		).stdout,
+	listEncoders: listFfmpegEncoders,
+	listDevices: listFfmpegDevices,
 	encodeTest: canEncodeWithVaapi,
 };
 
 let probeCache: Promise<LinuxVaapiAvailability> | null = null;
-
-export function resetLinuxVaapiProbe() {
-	probeCache = null;
-}
 
 /**
  * One-time check (cached per session) that the machine can hardware-encode the
