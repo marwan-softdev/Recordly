@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { useHudContentReporting } from "./useHudContentReporting";
 
 const RADIX_POPOVER_WRAPPER_SELECTOR = "[data-radix-popper-content-wrapper]";
-const POLL_INTERVAL_MS = 150;
 
 type ShapeRect = { x: number; y: number; width: number; height: number };
 
@@ -29,9 +29,7 @@ function shapeKey(shape: { bar: ShapeRect; popover: ShapeRect | null }): string 
  * applies them with win.setShape — everything outside the rects is neither
  * painted nor hit-tested, so there are no dead click zones.
  *
- * ResizeObserver catches layout changes (recording bar, webcam preview,
- * device lists); a light poll covers the Radix popover wrapper mounting and
- * repositioning. Reports are deduped, so the IPC only fires on real changes.
+ * Reports are deduped, so the IPC only fires on real changes.
  */
 export function useHudContentShapeReporting({
 	enabled,
@@ -42,88 +40,33 @@ export function useHudContentShapeReporting({
 	contentRef: React.RefObject<HTMLElement | null>;
 	openId: string | null;
 }) {
+	const lastReported = useRef("");
+	// Match the shared measurement loop's effect lifecycle: its dedup state
+	// resets whenever the loop is torn down and re-armed.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: enabled/openId intentionally reset the dedup state.
 	useEffect(() => {
-		if (!enabled) {
+		lastReported.current = "";
+	}, [enabled, openId]);
+
+	const measure = useCallback(() => {
+		const contentEl = contentRef.current;
+		if (!contentEl || !window.electronAPI?.hudOverlaySetContentShape) {
 			return;
 		}
-
-		let lastReported = "";
-		let frame = 0;
-
-		const report = () => {
-			const contentEl = contentRef.current;
-			if (!contentEl || !window.electronAPI?.hudOverlaySetContentShape) {
-				return;
-			}
-			const popoverEl = openId
-				? document.querySelector(RADIX_POPOVER_WRAPPER_SELECTOR)
-				: null;
-			const shape = {
-				bar: toRect(contentEl.getBoundingClientRect()),
-				popover: popoverEl ? toRect(popoverEl.getBoundingClientRect()) : null,
-			};
-			const key = shapeKey(shape);
-			if (key === lastReported) {
-				return;
-			}
-			lastReported = key;
-			window.electronAPI.hudOverlaySetContentShape(shape);
-		};
-
-		const scheduleReport = () => {
-			if (frame) {
-				return;
-			}
-			frame = requestAnimationFrame(() => {
-				frame = 0;
-				report();
-			});
-		};
-
-		const observer = new ResizeObserver(scheduleReport);
-		if (contentRef.current) {
-			observer.observe(contentRef.current);
-		}
-		const popoverObserver = new ResizeObserver(scheduleReport);
-
-		const attachPopoverObserver = () => {
-			const popoverEl = openId
-				? document.querySelector(RADIX_POPOVER_WRAPPER_SELECTOR)
-				: null;
-			if (popoverEl) {
-				popoverObserver.observe(popoverEl);
-				return true;
-			}
-			return false;
-		};
-
-		scheduleReport();
-		let attached = attachPopoverObserver();
-		// The Radix wrapper mounts a tick after the open state flips; a short
-		// poll covers that window (and repositions as menus resize).
-		const poll = openId
-			? setInterval(() => {
-					report();
-					if (!attached) {
-						attached = attachPopoverObserver();
-					}
-				}, POLL_INTERVAL_MS)
+		const popoverEl = openId
+			? document.querySelector(RADIX_POPOVER_WRAPPER_SELECTOR)
 			: null;
-
-		// Bar width can change without the content element resizing (marquee
-		// text swap); a light poll also covers that while the mode is active.
-		const idlePoll = setInterval(report, 1000);
-
-		return () => {
-			if (frame) {
-				cancelAnimationFrame(frame);
-			}
-			if (poll) {
-				clearInterval(poll);
-			}
-			clearInterval(idlePoll);
-			observer.disconnect();
-			popoverObserver.disconnect();
+		const shape = {
+			bar: toRect(contentEl.getBoundingClientRect()),
+			popover: popoverEl ? toRect(popoverEl.getBoundingClientRect()) : null,
 		};
-	}, [contentRef, enabled, openId]);
+		const key = shapeKey(shape);
+		if (key === lastReported.current) {
+			return;
+		}
+		lastReported.current = key;
+		window.electronAPI.hudOverlaySetContentShape(shape);
+	}, [contentRef, openId]);
+
+	useHudContentReporting({ enabled, contentRef, openId, measure });
 }

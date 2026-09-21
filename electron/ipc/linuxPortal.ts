@@ -80,10 +80,6 @@ export async function probePortalScreenCastSupport(
 
 let portalScreenCastProbe: Promise<boolean> | null = null;
 
-export function resetPortalScreenCastProbe() {
-	portalScreenCastProbe = null;
-}
-
 function getPortalScreenCastSupport(): Promise<boolean> {
 	if (!portalScreenCastProbe) {
 		portalScreenCastProbe = probePortalScreenCastSupport().catch(() => false);

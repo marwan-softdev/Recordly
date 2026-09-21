@@ -3,15 +3,11 @@
 // node_modules/electron (whose GL path is broken on some Linux drivers — see
 // LINUX-CURSOR-WORKLOG.md "Electron 39 fallback").
 //
-//   npm run dev                       # stock Electron (43) — the gpu-fallback probe
-//                                     #   offers the switch when the GPU path is broken;
-//                                     #   once the switch was accepted, starts on 39 directly
+//   npm run dev                       # stock Electron (43), or 39 directly when
+//                                     #   this machine's GL verdict was "software"
+//                                     #   and the switch was accepted
 //   npm run dev:39                    # require the staged Electron 39 (error if missing)
 //   npm run dev:43                    # stock, ignores the accepted switch
-//
-// The gpu-fallback restart flow also calls this script detached with:
-//   --await-port-free <url>           # wait for the previous dev server to die first
-//                                     # (implies --require-staged)
 //
 // Must run before `vite` so the plugin spawns the overridden binary.
 import { existsSync, readFileSync } from "node:fs";
@@ -25,11 +21,8 @@ const stagedBinary = path.join(projectRoot, "build", "electron-39", "electron");
 const stagedDistDir = path.dirname(stagedBinary);
 
 const argv = process.argv.slice(2);
-const requireStaged = argv.includes("--require-staged") || argv.includes("--await-port-free");
+const requireStaged = argv.includes("--require-staged");
 const forceStock = argv.includes("--restore");
-const awaitPortFreeIndex = argv.indexOf("--await-port-free");
-const awaitPortFreeUrl =
-	awaitPortFreeIndex >= 0 ? (argv[awaitPortFreeIndex + 1] ?? "") : "";
 
 // Skips the pointless 43 phase once this machine's GL verdict is "software"
 // and the switch was accepted — the keys live in the dev profile's
@@ -54,7 +47,7 @@ function hasAcceptedElectron39Switch() {
 }
 
 if (requireStaged) {
-	// Explicit dev:39, or the gpu-fallback relaunch (--await-port-free).
+	// Explicit dev:39 request.
 	if (!existsSync(stagedBinary)) {
 		console.error(
 			`[dev-with-electron] Staged Electron not found at ${stagedBinary}.\n` +
@@ -77,46 +70,12 @@ if (requireStaged) {
 	console.log("[dev-with-electron] Using the stock node_modules/electron binary (43).");
 }
 
-async function waitForDevServerToDisappear(url, timeoutMs = 60_000) {
-	if (!url) return;
-	const deadline = Date.now() + timeoutMs;
-	let announced = false;
-	while (Date.now() < deadline) {
-		try {
-			const response = await fetch(url, { method: "HEAD" });
-			if (!response.ok) return; // server gone or answering with an error
-		} catch {
-			return; // connection refused — the old server is gone
-		}
-		if (!announced) {
-			announced = true;
-			console.log(`[dev-with-electron] Waiting for the previous dev server (${url}) to shut down...`);
-		}
-		await new Promise((resolve) => setTimeout(resolve, 500));
-	}
-	console.warn("[dev-with-electron] Previous dev server still up after timeout; starting anyway.");
-}
-
-// This wrapper itself may be running under the Electron binary as Node
-// (ELECTRON_RUN_AS_NODE=1 set by the gpu-fallback relaunch). That flag must
-// NOT reach the vite/electron children or they start as plain Node too.
-delete process.env.ELECTRON_RUN_AS_NODE;
-
 const isWindows = process.platform === "win32";
 const viteBin = path.join(projectRoot, "node_modules", ".bin", isWindows ? "vite.CMD" : "vite");
 
-const startVite = () => {
-	const child = spawn(viteBin, ["--config", "vite.config.ts"], {
-		stdio: "inherit",
-		env: process.env,
-		cwd: projectRoot,
-	});
-	child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
-};
-
-if (awaitPortFreeUrl) {
-	// Detached restart flow: the old stack is shutting down as we start.
-	waitForDevServerToDisappear(awaitPortFreeUrl).then(startVite);
-} else {
-	startVite();
-}
+const child = spawn(viteBin, ["--config", "vite.config.ts"], {
+	stdio: "inherit",
+	env: process.env,
+	cwd: projectRoot,
+});
+child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));

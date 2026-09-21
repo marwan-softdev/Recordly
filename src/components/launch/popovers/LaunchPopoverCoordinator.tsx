@@ -27,7 +27,7 @@ export function LaunchPopoverCoordinatorProvider({ children }: { children: React
 		// room below the bar and positions the menu correctly on the first
 		// try. Content-size reports shrink it to exact size right after.
 		if (isHudGrowMode()) {
-			window.electronAPI?.hudOverlaySetPopoverOpen?.(true);
+			window.electronAPI?.hudOverlayPreGrowPopover?.();
 		}
 		setOpenId(id);
 	}, []);

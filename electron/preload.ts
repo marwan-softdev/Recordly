@@ -197,8 +197,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	hudOverlaySetContentSize: (size: { width: number; height: number }) => {
 		ipcRenderer.send("hud-overlay-set-content-size", size);
 	},
-	hudOverlaySetPopoverOpen: (open: boolean) => {
-		ipcRenderer.send("hud-overlay-set-popover-open", open);
+	hudOverlayPreGrowPopover: () => {
+		ipcRenderer.send("hud-overlay-pre-grow-popover");
 	},
 	hudOverlaySetContentShape: (shape: {
 		bar: { x: number; y: number; width: number; height: number };

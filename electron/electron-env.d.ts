@@ -213,7 +213,7 @@ interface Window {
 			mode: "legacy" | "shape" | "grow";
 		}>;
 		hudOverlaySetContentSize: (size: { width: number; height: number }) => void;
-		hudOverlaySetPopoverOpen: (open: boolean) => void;
+		hudOverlayPreGrowPopover: () => void;
 		hudOverlaySetContentShape: (shape: {
 			bar: { x: number; y: number; width: number; height: number };
 			popover: { x: number; y: number; width: number; height: number } | null;
