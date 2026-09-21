@@ -8,10 +8,8 @@ vi.mock("../ffmpeg/binary", () => ({
 import {
 	findNvidiaDeviceNode,
 	parseNvencEncoderSupport,
-	pickNvencCapableFfmpeg,
 	runLinuxNvencProbe,
 } from "./linuxNvenc";
-import { parseX11grabDeviceSupport } from "./linuxVaapi";
 
 const encoderList = [
 	" V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)",
@@ -41,44 +39,6 @@ describe("parseNvencEncoderSupport", () => {
 
 	it("rejects builds without h264_nvenc", () => {
 		expect(parseNvencEncoderSupport(encoderListWithoutNvenc)).toBe(false);
-	});
-});
-
-describe("parseX11grabDeviceSupport (shared with the VAAPI probe)", () => {
-	it("rejects builds without x11grab", () => {
-		expect(parseX11grabDeviceSupport(" pulse            PulseAudio")).toBe(false);
-	});
-});
-
-describe("pickNvencCapableFfmpeg", () => {
-	it("returns the first candidate that can encode with nvenc", async () => {
-		await expect(
-			pickNvencCapableFfmpeg(
-				["/usr/bin/ffmpeg", "/app/ffmpeg-static/ffmpeg"],
-				async (path) => path === "/usr/bin/ffmpeg",
-			),
-		).resolves.toBe("/usr/bin/ffmpeg");
-	});
-
-	it("falls through to a later candidate and skips duplicates", async () => {
-		const hasNvenc = vi.fn(async (path: string) => path.includes("static"));
-		await expect(
-			pickNvencCapableFfmpeg(
-				["/missing", "/usr/bin/ffmpeg", "/app/ffmpeg-static/ffmpeg", "/app/ffmpeg-static/ffmpeg"],
-				hasNvenc,
-			),
-		).resolves.toBe("/app/ffmpeg-static/ffmpeg");
-		expect(hasNvenc.mock.calls.map((args) => args[0])).toEqual([
-			"/missing",
-			"/usr/bin/ffmpeg",
-			"/app/ffmpeg-static/ffmpeg",
-		]);
-	});
-
-	it("returns null when no candidate qualifies", async () => {
-		await expect(
-			pickNvencCapableFfmpeg(["/a", null, undefined], async () => false),
-		).resolves.toBeNull();
 	});
 });
 

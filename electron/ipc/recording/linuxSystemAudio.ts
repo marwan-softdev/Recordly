@@ -7,13 +7,16 @@ import {
 	getFfmpegBinaryPath,
 	resolveSystemFfmpegBinaryPath,
 } from "../ffmpeg/binary";
+import {
+	listFfmpegDevices,
+	pickFirstCapableFfmpeg,
+} from "./ffmpegProbe";
 
 type SystemAudioProcess = ChildProcessByStdio<Writable, null, null>;
 
 const execFileAsync = promisify(execFile);
 
 const PACTL_TIMEOUT_MS = 5000;
-const FFMPEG_PROBE_TIMEOUT_MS = 10_000;
 
 export type LinuxSystemAudioUnavailableReason = "no-pulse-device" | "no-monitor-source";
 
@@ -49,33 +52,9 @@ export function resolveMonitorSourceName(
 	return sourceNames.find((sourceName) => sourceName.endsWith(".monitor")) ?? null;
 }
 
-/**
- * Picks the first candidate ffmpeg that supports the pulse device. The bundled
- * binary is tried first (keeps behaviour self-contained when possible); the
- * system install is the fallback for builds like ffmpeg-static that lack it.
- */
-export async function pickPulseCapableFfmpeg(
-	candidates: Array<string | null | undefined>,
-	hasPulseSupport: (ffmpegPath: string) => Promise<boolean>,
-): Promise<string | null> {
-	const tried = new Set<string>();
-	for (const candidate of candidates) {
-		if (!candidate || tried.has(candidate)) continue;
-		tried.add(candidate);
-		if (await hasPulseSupport(candidate)) {
-			return candidate;
-		}
-	}
-	return null;
-}
-
 export async function hasPulseDeviceSupport(ffmpegPath: string): Promise<boolean> {
 	try {
-		const devices = await execFileAsync(ffmpegPath, ["-hide_banner", "-devices"], {
-			timeout: FFMPEG_PROBE_TIMEOUT_MS,
-			maxBuffer: 1024 * 1024,
-		});
-		return /\bpulse\b/.test(devices.stdout);
+		return /\bpulse\b/.test(await listFfmpegDevices(ffmpegPath));
 	} catch {
 		return false;
 	}
@@ -94,10 +73,6 @@ function buildFfmpegCandidates(): string[] {
 }
 
 let probeCache: Promise<LinuxSystemAudioAvailability> | null = null;
-
-export function resetLinuxSystemAudioProbe() {
-	probeCache = null;
-}
 
 /**
  * Resolves the PulseAudio source that mirrors the default output ("monitor")
@@ -132,7 +107,10 @@ async function probeLinuxSystemAudioCapture(): Promise<LinuxSystemAudioAvailabil
 		// pactl missing or failed — fall through to the special-name fallback.
 	}
 
-	const ffmpegPath = await pickPulseCapableFfmpeg(
+	// The bundled binary is tried first (keeps behaviour self-contained when
+	// possible); the system install is the fallback for builds like
+	// ffmpeg-static that lack the pulse device.
+	const ffmpegPath = await pickFirstCapableFfmpeg(
 		buildFfmpegCandidates(),
 		hasPulseDeviceSupport,
 	);

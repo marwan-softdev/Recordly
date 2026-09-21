@@ -172,10 +172,6 @@ export async function probeNativeLinuxCaptureAvailability(): Promise<LinuxCaptur
 	}
 }
 
-export async function isNativeLinuxCaptureAvailable(): Promise<boolean> {
-	return (await probeNativeLinuxCaptureAvailability()).available;
-}
-
 export function waitForLinuxCaptureStart(proc: ChildProcessWithoutNullStreams) {
 	return new Promise<void>((resolve, reject) => {
 		const onError = (error: Error) => {

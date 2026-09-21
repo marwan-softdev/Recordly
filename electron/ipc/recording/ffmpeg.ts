@@ -29,6 +29,20 @@ export type LinuxCaptureEncoderOptions = {
 	nvenc?: boolean | null;
 };
 
+/** bt709 color tagging plus a web-optimized moov — shared by every encoder tier. */
+const COLOR_AND_MUX_FLAGS = [
+	"-colorspace",
+	"bt709",
+	"-color_primaries",
+	"bt709",
+	"-color_trc",
+	"bt709",
+	"-color_range",
+	"tv",
+	"-movflags",
+	"+faststart",
+];
+
 export async function buildFfmpegCaptureArgs(
 	source: SelectedSource,
 	outputPath: string,
@@ -44,16 +58,7 @@ export async function buildFfmpegCaptureArgs(
 		preset ?? "veryfast",
 		"-pix_fmt",
 		"yuv420p",
-		"-colorspace",
-		"bt709",
-		"-color_primaries",
-		"bt709",
-		"-color_trc",
-		"bt709",
-		"-color_range",
-		"tv",
-		"-movflags",
-		"+faststart",
+		...COLOR_AND_MUX_FLAGS,
 		outputPath,
 	];
 	const fullRangeOutputArgs = buildOutputArgs("full");
@@ -121,16 +126,7 @@ export async function buildFfmpegCaptureArgs(
 				"CQP",
 				"-compression_level",
 				"24",
-				"-colorspace",
-				"bt709",
-				"-color_primaries",
-				"bt709",
-				"-color_trc",
-				"bt709",
-				"-color_range",
-				"tv",
-				"-movflags",
-				"+faststart",
+				...COLOR_AND_MUX_FLAGS,
 				outputPath,
 			];
 			const inputArgs = await buildLinuxX11grabInputArgs(source, displayEnv);
@@ -154,16 +150,7 @@ export async function buildFfmpegCaptureArgs(
 				"constqp",
 				"-qp",
 				"24",
-				"-colorspace",
-				"bt709",
-				"-color_primaries",
-				"bt709",
-				"-color_trc",
-				"bt709",
-				"-color_range",
-				"tv",
-				"-movflags",
-				"+faststart",
+				...COLOR_AND_MUX_FLAGS,
 				outputPath,
 			];
 			const inputArgs = await buildLinuxX11grabInputArgs(source, displayEnv);
@@ -204,28 +191,17 @@ async function buildLinuxX11grabInputArgs(
 	displayEnv: string,
 	framerate = 60,
 ): Promise<string[]> {
+	let bounds: { x: number; y: number; width: number; height: number };
 	if (source?.id?.startsWith("window:")) {
-		const bounds = await resolveLinuxWindowBounds(source);
-		if (!bounds) {
+		const windowBounds = await resolveLinuxWindowBounds(source);
+		if (!windowBounds) {
 			throw new Error("Unable to resolve Linux window bounds for FFmpeg capture");
 		}
-
-		return [
-			"-y",
-			"-f",
-			"x11grab",
-			"-framerate",
-			String(framerate),
-			"-draw_mouse",
-			"0",
-			"-video_size",
-			`${Math.max(2, bounds.width)}x${Math.max(2, bounds.height)}`,
-			"-i",
-			`${displayEnv}+${Math.round(bounds.x)},${Math.round(bounds.y)}`,
-		];
+		bounds = windowBounds;
+	} else {
+		bounds = getDisplayBoundsForSource(source);
 	}
 
-	const bounds = getDisplayBoundsForSource(source);
 	return [
 		"-y",
 		"-f",

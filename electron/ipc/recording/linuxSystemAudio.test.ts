@@ -1,9 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	buildSystemAudioArgs,
 	parseDefaultSinkName,
 	parsePactlSourceNames,
-	pickPulseCapableFfmpeg,
 	resolveMonitorSourceName,
 } from "./linuxSystemAudio";
 
@@ -84,39 +83,5 @@ describe("buildSystemAudioArgs", () => {
 		expect(buildSystemAudioArgs("@DEFAULT_MONITOR@", "/tmp/a.wav")).not.toContain(
 			"-nostdin",
 		);
-	});
-});
-
-describe("pickPulseCapableFfmpeg", () => {
-	it("falls back to the system ffmpeg when the bundled one lacks pulse", async () => {
-		const support = vi.fn(async (ffmpegPath: string) => ffmpegPath === "/usr/bin/ffmpeg");
-		await expect(
-			pickPulseCapableFfmpeg(["/bundled/ffmpeg", "/usr/bin/ffmpeg"], support),
-		).resolves.toBe("/usr/bin/ffmpeg");
-		expect(support.mock.invocationCallOrder).toHaveLength(2);
-	});
-
-	it("prefers the bundled ffmpeg when it has pulse support", async () => {
-		const support = vi.fn(async () => true);
-		await expect(
-			pickPulseCapableFfmpeg(["/bundled/ffmpeg", "/usr/bin/ffmpeg"], support),
-		).resolves.toBe("/bundled/ffmpeg");
-		expect(support).toHaveBeenCalledTimes(1);
-	});
-
-	it("skips null candidates and returns null when nothing supports pulse", async () => {
-		const support = vi.fn(async () => false);
-		await expect(
-			pickPulseCapableFfmpeg([null, undefined, "/usr/bin/ffmpeg"], support),
-		).resolves.toBeNull();
-		expect(support).toHaveBeenCalledTimes(1);
-	});
-
-	it("probes duplicate paths only once", async () => {
-		const support = vi.fn(async () => true);
-		await expect(
-			pickPulseCapableFfmpeg(["/usr/bin/ffmpeg", "/usr/bin/ffmpeg"], support),
-		).resolves.toBe("/usr/bin/ffmpeg");
-		expect(support).toHaveBeenCalledTimes(1);
 	});
 });

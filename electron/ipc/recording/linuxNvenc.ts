@@ -5,11 +5,15 @@ import {
 	getFfmpegBinaryPath,
 	resolveSystemFfmpegBinaryPath,
 } from "../ffmpeg/binary";
+import {
+	FFMPEG_PROBE_TIMEOUT_MS,
+	listFfmpegDevices,
+	listFfmpegEncoders,
+	pickFirstCapableFfmpeg,
+} from "./ffmpegProbe";
 import { parseX11grabDeviceSupport } from "./linuxVaapi";
 
 const execFileAsync = promisify(execFile);
-
-const FFMPEG_PROBE_TIMEOUT_MS = 10_000;
 
 export type LinuxNvencUnavailableReason =
 	| "no-nvidia-device"
@@ -73,26 +77,6 @@ export async function canEncodeWithNvenc(ffmpegPath: string): Promise<boolean> {
 	}
 }
 
-/**
- * Picks the first candidate ffmpeg that has h264_nvenc. System install first
- * (the bundled ffmpeg-static build is known to lack the nvenc headers); the
- * bundled binary stays in the list in case a future static build ships them.
- */
-export async function pickNvencCapableFfmpeg(
-	candidates: Array<string | null | undefined>,
-	hasNvencSupport: (ffmpegPath: string) => Promise<boolean>,
-): Promise<string | null> {
-	const tried = new Set<string>();
-	for (const candidate of candidates) {
-		if (!candidate || tried.has(candidate)) continue;
-		tried.add(candidate);
-		if (await hasNvencSupport(candidate)) {
-			return candidate;
-		}
-	}
-	return null;
-}
-
 export type LinuxNvencProbeDeps = {
 	readdir: (path: string) => Promise<string[]>;
 	listEncoders: (ffmpegPath: string) => Promise<string>;
@@ -115,8 +99,11 @@ export async function runLinuxNvencProbe(
 
 	let ffmpegPath: string;
 	try {
+		// System install first (the bundled ffmpeg-static build is known to
+		// lack the nvenc headers); the bundled binary stays in the list in
+		// case a future static build ships them.
 		const candidates = [resolveSystemFfmpegBinaryPath(), tryGetBundledFfmpegPath()];
-		const nvencFfmpeg = await pickNvencCapableFfmpeg(
+		const nvencFfmpeg = await pickFirstCapableFfmpeg(
 			candidates,
 			async (candidate) =>
 				parseNvencEncoderSupport(await deps.listEncoders(candidate)),
@@ -153,28 +140,12 @@ function tryGetBundledFfmpegPath(): string | null {
 
 const defaultDeps: LinuxNvencProbeDeps = {
 	readdir: async (path) => (await fs.readdir(path)).map((entry) => entry.toString()),
-	listEncoders: async (ffmpegPath) =>
-		(
-			await execFileAsync(ffmpegPath, ["-hide_banner", "-encoders"], {
-				timeout: FFMPEG_PROBE_TIMEOUT_MS,
-				maxBuffer: 1024 * 1024,
-			})
-		).stdout,
-	listDevices: async (ffmpegPath) =>
-		(
-			await execFileAsync(ffmpegPath, ["-hide_banner", "-devices"], {
-				timeout: FFMPEG_PROBE_TIMEOUT_MS,
-				maxBuffer: 1024 * 1024,
-			})
-		).stdout,
+	listEncoders: listFfmpegEncoders,
+	listDevices: listFfmpegDevices,
 	encodeTest: canEncodeWithNvenc,
 };
 
 let probeCache: Promise<LinuxNvencAvailability> | null = null;
-
-export function resetLinuxNvencProbe() {
-	probeCache = null;
-}
 
 /**
  * One-time check (cached per session) that the machine can hardware-encode

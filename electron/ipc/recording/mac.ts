@@ -227,6 +227,17 @@ export function attachNativeCaptureLifecycle(process: ChildProcessWithoutNullStr
 	});
 }
 
+/** True when the last diagnostics snapshot came from an OS-native backend. */
+function isNativeCaptureBackend(
+	diagnostics: typeof lastNativeCaptureDiagnostics,
+): diagnostics is NonNullable<typeof lastNativeCaptureDiagnostics> {
+	return (
+		diagnostics?.backend === "mac-screencapturekit" ||
+		diagnostics?.backend === "windows-wgc" ||
+		diagnostics?.backend === "linux-x11grab"
+	);
+}
+
 export async function finalizeStoredVideo(videoPath: string) {
 	console.log("[finalize] Optimization active: skipping safety-net muxing.");
 
@@ -234,11 +245,7 @@ export async function finalizeStoredVideo(videoPath: string) {
 	try {
 		validation = await validateRecordedVideo(videoPath);
 	} catch (error) {
-		if (
-			lastNativeCaptureDiagnostics?.backend === "mac-screencapturekit" ||
-			lastNativeCaptureDiagnostics?.backend === "windows-wgc" ||
-			lastNativeCaptureDiagnostics?.backend === "linux-x11grab"
-		) {
+		if (isNativeCaptureBackend(lastNativeCaptureDiagnostics)) {
 			recordNativeCaptureDiagnostics({
 				backend: lastNativeCaptureDiagnostics.backend,
 				phase: lastNativeCaptureDiagnostics.phase === "mux" ? "mux" : "stop",
@@ -271,11 +278,7 @@ export async function finalizeStoredVideo(videoPath: string) {
 		console.warn("[mac-stop] Failed to persist cursor telemetry:", error);
 	}
 
-	if (
-		lastNativeCaptureDiagnostics?.backend === "mac-screencapturekit" ||
-		lastNativeCaptureDiagnostics?.backend === "windows-wgc" ||
-		lastNativeCaptureDiagnostics?.backend === "linux-x11grab"
-	) {
+	if (isNativeCaptureBackend(lastNativeCaptureDiagnostics)) {
 		recordNativeCaptureDiagnostics({
 			backend: lastNativeCaptureDiagnostics.backend,
 			phase: lastNativeCaptureDiagnostics.phase === "mux" ? "mux" : "stop",
