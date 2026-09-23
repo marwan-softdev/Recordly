@@ -98,6 +98,7 @@ export function useInitialEditorSource({
 						appearance.autoApplyFreshRecordingAutoZooms ? sourceUrl : null;
 					appearance.setWebcam((previous) => ({
 						...previous,
+						visibleRanges: undefined,
 						enabled: Boolean(webcamPath),
 						sourcePath: webcamPath,
 						timeOffsetMs: DEFAULT_WEBCAM_TIME_OFFSET_MS,
@@ -133,6 +134,7 @@ export function useInitialEditorSource({
 					pendingFreshRecordingAutoZoomPathRef.current = null;
 					appearance.setWebcam((previous) => ({
 						...previous,
+						visibleRanges: undefined,
 						enabled: Boolean(webcamPath),
 						sourcePath: webcamPath,
 						timeOffsetMs: DEFAULT_WEBCAM_TIME_OFFSET_MS,
@@ -168,6 +170,7 @@ export function useInitialEditorSource({
 					applySessionPresentation(sessionResult.session);
 					appearance.setWebcam((previous) => ({
 						...previous,
+						visibleRanges: undefined,
 						enabled: Boolean(sessionResult.session?.webcamPath),
 						sourcePath: sessionResult.session?.webcamPath ?? null,
 						timeOffsetMs:
@@ -178,7 +181,8 @@ export function useInitialEditorSource({
 
 				const currentVideo = await window.electronAPI.getCurrentVideoPath();
 				if (!currentVideo.success || !currentVideo.path) {
-					project.setError("No video to load. Please record or select a video.");
+					// An empty session is the normal dashboard launch, not a load failure.
+					project.setProjectBrowserOpen(true);
 					return;
 				}
 				const sourcePath = fromFileUrl(currentVideo.path);
@@ -191,6 +195,7 @@ export function useInitialEditorSource({
 				applySessionPresentation(null);
 				appearance.setWebcam((previous) => ({
 					...previous,
+					visibleRanges: undefined,
 					enabled: false,
 					sourcePath: null,
 					timeOffsetMs: DEFAULT_WEBCAM_TIME_OFFSET_MS,
@@ -218,6 +223,7 @@ export function useInitialEditorSource({
 			if (!session || sessionSourcePath !== videoSourcePath) return;
 			appearance.setWebcam((previous) => ({
 				...previous,
+				visibleRanges: undefined,
 				enabled: Boolean(webcamPath),
 				sourcePath: webcamPath,
 				timeOffsetMs: webcamPath

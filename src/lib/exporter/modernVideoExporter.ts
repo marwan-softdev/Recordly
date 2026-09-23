@@ -17,13 +17,8 @@ import type {
 	ZoomRegion,
 	ZoomTransitionEasing,
 } from "@/components/video-editor/types";
-import { DEFAULT_WEBCAM_ROUNDNESS, ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
-import { DEFAULT_FOCUS } from "@/components/video-editor/videoPlayback/constants";
-import {
-	computeCursorFollowFocus,
-	createCursorFollowCameraState,
-	SNAP_TO_EDGES_RATIO_AUTO,
-} from "@/components/video-editor/videoPlayback/cursorFollowCamera";
+import { DEFAULT_WEBCAM_ROUNDNESS } from "@/components/video-editor/types";
+import { createCursorFollowCameraState } from "@/components/video-editor/videoPlayback/cursorFollowCamera";
 import { buildNativeCursorAtlas } from "@/components/video-editor/videoPlayback/cursorRenderer";
 import { getCursorViewportScale } from "@/components/video-editor/videoPlayback/cursorScale";
 import {
@@ -36,8 +31,9 @@ import {
 	resetSpringState,
 	stepSpringValue,
 } from "@/components/video-editor/videoPlayback/motionSmoothing";
+import { getSceneEffectMetrics } from "@/components/video-editor/videoPlayback/sceneEffects";
+import { resolveSceneZoomTarget } from "@/components/video-editor/videoPlayback/sceneMotion";
 import { getCursorStyleSizeMultiplier } from "@/components/video-editor/videoPlayback/uploadedCursorAssets";
-import { findDominantRegion } from "@/components/video-editor/videoPlayback/zoomRegionUtils";
 import { computeZoomTransform } from "@/components/video-editor/videoPlayback/zoomTransform";
 import {
 	getWebcamCornerRadiusPx,
@@ -57,6 +53,7 @@ import {
 	shouldPreferNativeAutoBackend,
 	shouldPreferNativeStaticLayoutBeforeBreeze,
 } from "./backendPolicy";
+import { requiresClipTimelineRendering } from "./clipTimeline";
 import { buildEditedTrackSourceSegments, classifyEditedTrackStrategy } from "./editedTrackStrategy";
 import {
 	type ExportBackpressureProfile,
@@ -107,9 +104,6 @@ interface VideoExporterConfig extends ExportConfig {
 	backgroundBlur: number;
 	zoomMotionBlur?: number;
 	zoomMotionBlurTuning?: ZoomMotionBlurTuning;
-	zoomTemporalMotionBlur?: number;
-	zoomMotionBlurSampleCount?: number | null;
-	zoomMotionBlurShutterFraction?: number | null;
 	connectZooms?: boolean;
 	zoomInDurationMs?: number;
 	zoomInOverlapMs?: number;
@@ -159,6 +153,14 @@ interface VideoExporterConfig extends ExportConfig {
 	previewHeight?: number;
 	onProgress?: (progress: ExportProgress) => void;
 	preferredEncoderPath?: SupportedMp4EncoderPath | null;
+}
+
+interface ExportRuntimeDiagnostics {
+	appVersion?: string;
+	userAgent?: string;
+	logicalProcessors?: number;
+	deviceMemoryGb?: number;
+	hardware?: RendererExportHardwareInfo;
 }
 
 type NativeAudioPlan =
@@ -367,6 +369,9 @@ export class ModernVideoExporter {
 	private lastProgressSampleTimeMs = 0;
 	private lastProgressSampleFrame = 0;
 	private displayedRenderFps = 0;
+	private sourceVideoInfo: DecodedVideoInfo | null = null;
+	private mediaSourceRetryAttempted = false;
+	private runtimeDiagnostics: ExportRuntimeDiagnostics = {};
 
 	constructor(config: VideoExporterConfig) {
 		this.config = config;
@@ -375,9 +380,13 @@ export class ModernVideoExporter {
 	async export(): Promise<ExportResult> {
 		let useFallbackMediaSource = false;
 		let retriedWithFallbackMediaSource = false;
+		let nativeFailure: string | null = null;
+		this.mediaSourceRetryAttempted = false;
+		this.runtimeDiagnostics = await this.collectRuntimeDiagnostics();
 
 		while (true) {
-			let shouldRetryWithFallbackMediaSource = false;
+			let retryExport = false;
+			let inNativeStage = false;
 			try {
 				this.cleanup();
 				this.cancelled = false;
@@ -386,22 +395,23 @@ export class ModernVideoExporter {
 				this.nativeStaticLayoutSkipReason = null;
 				this.nativeStaticLayoutSkipReasons = [];
 				this.nativeStaticLayoutBackgroundSkipReason = null;
+				this.sourceVideoInfo = null;
 				this.totalExportStartTimeMs = this.getNowMs();
-				const backendPreference = this.config.backendPreference ?? "auto";
+				const backendPreference = nativeFailure
+					? "webcodecs"
+					: (this.config.backendPreference ?? "auto");
 				const runtimePlatform = this.getRuntimePlatform();
 				let useNativeEncoder = false;
 				let triedNativeStaticLayoutWithProbe = false;
 				const prefersNativeStaticLayoutBeforeBreeze =
 					shouldPreferNativeStaticLayoutBeforeBreeze(runtimePlatform, backendPreference);
 				const shouldTryNativeStaticLayout =
-					backendPreference === "breeze" ||
-					this.config.experimentalNvidiaCudaExport === true ||
-					prefersNativeStaticLayoutBeforeBreeze;
-				let shouldDeferNativeEncoderStart =
-					backendPreference === "breeze" ||
-					this.config.experimentalNvidiaCudaExport === true ||
-					prefersNativeStaticLayoutBeforeBreeze;
-				this.lastNativeExportError = null;
+					!nativeFailure &&
+					(backendPreference === "breeze" ||
+						this.config.experimentalNvidiaCudaExport === true ||
+						prefersNativeStaticLayoutBeforeBreeze);
+				let shouldDeferNativeEncoderStart = shouldTryNativeStaticLayout;
+				this.lastNativeExportError = nativeFailure;
 
 				let stageStartedAt = this.getNowMs();
 				if (shouldDeferNativeEncoderStart) {
@@ -526,6 +536,7 @@ export class ModernVideoExporter {
 				const videoInfo = await this.streamingDecoder.loadMetadata(this.config.videoUrl, {
 					useFallbackMediaSource,
 				});
+				this.sourceVideoInfo = videoInfo;
 				this.metadataLoadTimeMs = this.getNowMs() - stageStartedAt;
 				const nativeAudioPlan = this.buildNativeAudioPlan(videoInfo);
 				const shouldUsePitchPreservingFfmpegAudio =
@@ -534,10 +545,14 @@ export class ModernVideoExporter {
 				const shouldUseFfmpegAudioFallback =
 					!useNativeEncoder &&
 					nativeAudioPlan.audioMode !== "none" &&
-					(shouldUsePitchPreservingFfmpegAudio || !(await isAacAudioEncodingSupported()));
+					// The PCM/FFmpeg path preserves AAC priming; WebCodecs AAC can shift clip cuts.
+					(requiresClipTimelineRendering(this.config.clipRegions) ||
+						shouldUsePitchPreservingFfmpegAudio ||
+						!(await isAacAudioEncodingSupported()));
 				const effectiveDuration = this.streamingDecoder.getEffectiveDuration(
 					this.config.trimRegions,
 					this.config.speedRegions,
+					this.config.clipRegions,
 				);
 				this.effectiveDurationSec = effectiveDuration;
 				const totalFrames = Math.ceil(effectiveDuration * this.config.frameRate);
@@ -586,6 +601,7 @@ export class ModernVideoExporter {
 
 				stageStartedAt = this.getNowMs();
 				this.renderer = new ModernFrameRenderer({
+					timelineEffects: this.config.clipRegions !== undefined,
 					width: this.config.width,
 					height: this.config.height,
 					preferredRenderBackend: undefined,
@@ -596,9 +612,6 @@ export class ModernVideoExporter {
 					backgroundBlur: this.config.backgroundBlur,
 					zoomMotionBlur: this.config.zoomMotionBlur,
 					zoomMotionBlurTuning: this.config.zoomMotionBlurTuning,
-					zoomTemporalMotionBlur: this.config.zoomTemporalMotionBlur,
-					zoomMotionBlurSampleCount: this.config.zoomMotionBlurSampleCount,
-					zoomMotionBlurShutterFraction: this.config.zoomMotionBlurShutterFraction,
 					connectZooms: this.config.connectZooms,
 					zoomInDurationMs: this.config.zoomInDurationMs,
 					zoomInOverlapMs: this.config.zoomInOverlapMs,
@@ -707,11 +720,13 @@ export class ModernVideoExporter {
 						}
 
 						if (useNativeEncoder) {
+							inNativeStage = true;
 							await this.encodeRenderedFrameNative(
 								timestamp,
 								frameDuration,
 								frameIndex,
 							);
+							inNativeStage = false;
 						} else {
 							await this.encodeRenderedFrame(timestamp, frameDuration, frameIndex);
 						}
@@ -720,6 +735,7 @@ export class ModernVideoExporter {
 						this.processedFrameCount = frameIndex;
 						this.reportProgress(frameIndex, totalFrames, "extracting");
 					},
+					this.config.clipRegions,
 				);
 				this.decodeLoopTimeMs = this.getNowMs() - decodeLoopStartedAt;
 
@@ -742,6 +758,7 @@ export class ModernVideoExporter {
 				this.reportFinalizingProgress(totalFrames, 96);
 
 				if (useNativeEncoder) {
+					inNativeStage = true;
 					stageStartedAt = this.getNowMs();
 					this.reportFinalizingProgress(totalFrames, 99);
 					if (this.nativeH264Encoder) {
@@ -755,12 +772,9 @@ export class ModernVideoExporter {
 						!finishResult.success ||
 						(!finishResult.tempFilePath && !finishResult.blob)
 					) {
-						return {
-							success: false,
-							error:
-								finishResult.error || `${NATIVE_EXPORT_ENGINE_NAME} export failed`,
-							metrics: this.buildExportMetrics(),
-						};
+						throw new Error(
+							finishResult.error || `${NATIVE_EXPORT_ENGINE_NAME} export failed`,
+						);
 					}
 
 					return {
@@ -889,13 +903,28 @@ export class ModernVideoExporter {
 				};
 			} catch (error) {
 				if (
+					!this.cancelled &&
+					!nativeFailure &&
+					(inNativeStage || this.nativeEncoderError)
+				) {
+					nativeFailure = this.buildLightningExportError(
+						this.nativeEncoderError ?? error,
+					);
+					console.error(
+						"[VideoExporter] Native export failed; restarting once with WebCodecs.\n" +
+							nativeFailure,
+					);
+					retryExport = true;
+				} else if (
+					!this.cancelled &&
 					!useFallbackMediaSource &&
 					!retriedWithFallbackMediaSource &&
 					this.shouldRetryWithFallbackMediaSource(error)
 				) {
 					retriedWithFallbackMediaSource = true;
+					this.mediaSourceRetryAttempted = true;
 					useFallbackMediaSource = true;
-					shouldRetryWithFallbackMediaSource = true;
+					retryExport = true;
 					console.warn(
 						"[VideoExporter] Primary decode path failed; retrying export once with a fresh media source.",
 						error,
@@ -918,7 +947,7 @@ export class ModernVideoExporter {
 					};
 				}
 			} finally {
-				if (!shouldRetryWithFallbackMediaSource && this.totalExportStartTimeMs > 0) {
+				if (!retryExport && this.totalExportStartTimeMs > 0) {
 					console.log(
 						`[VideoExporter] Final metrics ${JSON.stringify(this.buildExportMetrics())}`,
 					);
@@ -926,7 +955,7 @@ export class ModernVideoExporter {
 				this.cleanup();
 			}
 
-			if (shouldRetryWithFallbackMediaSource) {
+			if (retryExport) {
 				continue;
 			}
 		}
@@ -965,13 +994,70 @@ export class ModernVideoExporter {
 		return normalizeLightningRuntimePlatform(navigator.platform || navigator.userAgent || "");
 	}
 
+	private async collectRuntimeDiagnostics(): Promise<ExportRuntimeDiagnostics> {
+		const diagnostics: ExportRuntimeDiagnostics = {};
+		if (typeof navigator !== "undefined") {
+			const navigatorWithMemory = navigator as Navigator & { deviceMemory?: number };
+			if (navigator.userAgent) diagnostics.userAgent = navigator.userAgent;
+			if (navigator.hardwareConcurrency > 0) {
+				diagnostics.logicalProcessors = navigator.hardwareConcurrency;
+			}
+			if (
+				typeof navigatorWithMemory.deviceMemory === "number" &&
+				navigatorWithMemory.deviceMemory > 0
+			) {
+				diagnostics.deviceMemoryGb = navigatorWithMemory.deviceMemory;
+			}
+		}
+
+		try {
+			if (
+				typeof window !== "undefined" &&
+				typeof window.electronAPI?.getAppVersion === "function"
+			) {
+				diagnostics.appVersion = await window.electronAPI.getAppVersion();
+			}
+		} catch {
+			// Environment diagnostics must never prevent an export attempt.
+		}
+
+		try {
+			if (
+				typeof window !== "undefined" &&
+				typeof window.electronAPI?.getExportHardwareInfo === "function"
+			) {
+				const result = await window.electronAPI.getExportHardwareInfo();
+				if (result.success && result.hardware) {
+					diagnostics.hardware = result.hardware;
+				}
+			}
+		} catch {
+			// Environment diagnostics must never prevent an export attempt.
+		}
+
+		return diagnostics;
+	}
+
 	private getLightningErrorGuidance(message: string): string[] {
 		const guidance = new Set<string>();
 		const platform = this.getPlatformLabel();
+		const isVideoDecodeFailure = /VideoDecoder failure|VIDEO_DECODE|VIDEO_CODEC/i.test(message);
 
-		guidance.add(
-			"Lightning is designed to work on macOS, Windows, and Linux, but the available encoder path depends on WebCodecs support, GPU drivers, and the bundled FFmpeg encoders.",
-		);
+		if (isVideoDecodeFailure) {
+			guidance.add(
+				"The input video decoder failed before Recordly could finish rendering the source frames.",
+			);
+			guidance.add(
+				"If only this recording fails, remux or convert it to a standard H.264 MP4; the source may contain a damaged or unsupported frame.",
+			);
+			guidance.add(
+				"If every recording fails, update the GPU/media driver and retry at 30 FPS to reduce decoder pressure.",
+			);
+		} else {
+			guidance.add(
+				"Lightning is designed to work on macOS, Windows, and Linux, but the available encoder path depends on WebCodecs support, GPU drivers, and the bundled FFmpeg encoders.",
+			);
+		}
 
 		if (/even output dimensions/i.test(message)) {
 			guidance.add(
@@ -996,15 +1082,15 @@ export class ModernVideoExporter {
 			);
 		}
 
-		if (platform === "Windows") {
+		if (!isVideoDecodeFailure && platform === "Windows") {
 			guidance.add(
 				"Windows Lightning exports can use WebCodecs or FFmpeg encoders such as h264_nvenc, h264_qsv, h264_amf, h264_mf, or libx264 depending on the machine.",
 			);
-		} else if (platform === "Linux") {
+		} else if (!isVideoDecodeFailure && platform === "Linux") {
 			guidance.add(
 				"Linux Lightning exports can use WebCodecs when supported, or FFmpeg encoders such as libx264 and optional GPU paths depending on the distro build.",
 			);
-		} else if (platform === "macOS") {
+		} else if (!isVideoDecodeFailure && platform === "macOS") {
 			guidance.add(
 				"macOS Lightning exports can use WebCodecs or VideoToolbox/libx264 through Breeze depending on the output profile.",
 			);
@@ -1015,6 +1101,8 @@ export class ModernVideoExporter {
 
 	private buildLightningExportError(error: unknown): string {
 		const message = error instanceof Error ? error.message : String(error);
+		const failureCode = message.match(/\[([A-Z][A-Z0-9_]+)\]/)?.[1];
+		const isVideoDecodeFailure = /VideoDecoder failure|VIDEO_DECODE|VIDEO_CODEC/i.test(message);
 		const resolvedEncodePath =
 			this.encodeBackend === "ffmpeg"
 				? `${NATIVE_EXPORT_ENGINE_NAME} native`
@@ -1023,11 +1111,96 @@ export class ModernVideoExporter {
 					: null;
 		const lines = [
 			`${LIGHTNING_PIPELINE_NAME} export failed.`,
+			...(failureCode ? [`Failure code: ${failureCode}`] : []),
+			...(isVideoDecodeFailure ? ["Failure stage: Input video decoding"] : []),
 			`Reason: ${message}`,
 			`Platform: ${this.getPlatformLabel()}`,
 			`Requested backend mode: ${this.config.backendPreference ?? "auto"}`,
-			`Output: ${this.config.width}x${this.config.height} @ ${this.config.frameRate} FPS`,
+			`Output: ${this.config.width}x${this.config.height} @ ${this.config.frameRate} FPS; ${(this.config.bitrate / 1_000_000).toFixed(2)} Mbps; mode=${this.config.encodingMode ?? "default"}`,
 		];
+
+		if (this.runtimeDiagnostics.appVersion) {
+			lines.push(`Recordly version: ${this.runtimeDiagnostics.appVersion}`);
+		}
+		if (this.runtimeDiagnostics.userAgent) {
+			lines.push(`Runtime: ${this.runtimeDiagnostics.userAgent}`);
+		}
+		const hardware = this.runtimeDiagnostics.hardware;
+		if (hardware) {
+			lines.push(
+				`System: ${hardware.platform} ${hardware.release} (${hardware.arch})${hardware.machineModel ? `; model=${hardware.machineModel}` : ""}`,
+			);
+			lines.push(
+				`CPU: ${hardware.cpuModel ?? "Unknown"}; ${hardware.logicalProcessors} logical processors`,
+			);
+			lines.push(`Memory: ${hardware.totalMemoryGb} GB`);
+			for (const [index, gpu] of hardware.gpus.entries()) {
+				const details = [
+					gpu.vendor && !gpu.name.toLowerCase().includes(gpu.vendor.toLowerCase())
+						? `vendor=${gpu.vendor}`
+						: null,
+					gpu.active === true ? "active" : gpu.active === false ? "inactive" : null,
+				].filter((value): value is string => Boolean(value));
+				lines.push(
+					`GPU ${index + 1}: ${gpu.name}${details.length ? `; ${details.join("; ")}` : ""}`,
+				);
+			}
+			const gpuFeatures = [
+				hardware.gpuFeatures.videoDecode
+					? `video decode=${hardware.gpuFeatures.videoDecode}`
+					: null,
+				hardware.gpuFeatures.videoEncode
+					? `video encode=${hardware.gpuFeatures.videoEncode}`
+					: null,
+				hardware.gpuFeatures.webgl ? `WebGL=${hardware.gpuFeatures.webgl}` : null,
+				hardware.gpuFeatures.webgpu ? `WebGPU=${hardware.gpuFeatures.webgpu}` : null,
+			].filter((value): value is string => Boolean(value));
+			if (gpuFeatures.length > 0) {
+				lines.push(`GPU acceleration: ${gpuFeatures.join("; ")}`);
+			}
+		} else {
+			const hardwareParts = [
+				this.runtimeDiagnostics.logicalProcessors
+					? `${this.runtimeDiagnostics.logicalProcessors} logical processors`
+					: null,
+				this.runtimeDiagnostics.deviceMemoryGb
+					? `${this.runtimeDiagnostics.deviceMemoryGb} GB device memory`
+					: null,
+			].filter((value): value is string => Boolean(value));
+			if (hardwareParts.length > 0) {
+				lines.push(`Hardware capacity: ${hardwareParts.join("; ")}`);
+			}
+		}
+
+		if (this.sourceVideoInfo) {
+			lines.push(
+				`Source: ${this.sourceVideoInfo.codec} ${this.sourceVideoInfo.width}x${this.sourceVideoInfo.height} @ ${this.sourceVideoInfo.frameRate.toFixed(3)} FPS; ${this.sourceVideoInfo.duration.toFixed(3)}s`,
+			);
+			lines.push(
+				this.sourceVideoInfo.hasAudio
+					? `Source audio: ${this.sourceVideoInfo.audioCodec ?? "unknown codec"}${this.sourceVideoInfo.audioSampleRate ? ` @ ${this.sourceVideoInfo.audioSampleRate} Hz` : ""}`
+					: "Source audio: none",
+			);
+		}
+
+		if (this.totalExportStartTimeMs > 0) {
+			const elapsedSeconds = Math.max(
+				0,
+				(this.getNowMs() - this.totalExportStartTimeMs) / 1000,
+			);
+			const expectedFrames = Math.ceil(this.effectiveDurationSec * this.config.frameRate);
+			const progressSuffix =
+				expectedFrames > 0
+					? `/${expectedFrames} (${Math.min(100, (this.processedFrameCount / expectedFrames) * 100).toFixed(1)}%)`
+					: "";
+			lines.push(
+				`Progress at failure: ${this.processedFrameCount}${progressSuffix} rendered frames after ${elapsedSeconds.toFixed(2)}s`,
+			);
+		}
+
+		if (this.mediaSourceRetryAttempted) {
+			lines.push("Media source retry: attempted with a fresh source");
+		}
 
 		if (this.renderBackend) {
 			lines.push(`Renderer: ${this.renderBackend}`);
@@ -1036,6 +1209,12 @@ export class ModernVideoExporter {
 		if (resolvedEncodePath) {
 			lines.push(
 				`Encoder path: ${resolvedEncodePath}${this.encoderName ? ` (${this.encoderName})` : ""}`,
+			);
+		}
+
+		if (this.backpressureProfile) {
+			lines.push(
+				`Pipeline tuning: ${this.backpressureProfile.name}; decode queue=${this.config.maxDecodeQueue ?? this.backpressureProfile.maxDecodeQueue}; pending frames=${this.config.maxPendingFrames ?? this.backpressureProfile.maxPendingFrames}; encode queue=${this.config.maxEncodeQueue ?? this.backpressureProfile.maxEncodeQueue}`,
 			);
 		}
 
@@ -1302,6 +1481,7 @@ export class ModernVideoExporter {
 		}
 
 		if (
+			requiresClipTimelineRendering(this.config.clipRegions) ||
 			speedRegions.length > 0 ||
 			audioRegions.length > 0 ||
 			sourceAudioFallbackPaths.length > 1 ||
@@ -1328,6 +1508,7 @@ export class ModernVideoExporter {
 				Number.isFinite(primaryAudioSourceSampleRate) &&
 				primaryAudioSourceSampleRate > 0;
 			const requiresRenderedEditedTrack =
+				requiresClipTimelineRendering(this.config.clipRegions) ||
 				hasNonDefaultSourceTrackSettings(this.config.sourceAudioTrackSettings) ||
 				(this.config.clipRegions ?? []).some((clip) => Boolean(clip.muted));
 			const strategy =
@@ -1508,6 +1689,8 @@ export class ModernVideoExporter {
 		effectiveDurationSec: number,
 	): string[] {
 		const reasons: string[] = [];
+		if (requiresClipTimelineRendering(this.config.clipRegions))
+			reasons.push("explicit-clip-timeline");
 		if (
 			typeof window === "undefined" ||
 			!window.electronAPI?.nativeStaticLayoutExport ||
@@ -1968,10 +2151,17 @@ export class ModernVideoExporter {
 			),
 		);
 
+		this.throwIfCancelled();
+		const editedAudioData = await audioBlob.arrayBuffer();
+		this.throwIfCancelled();
 		return {
-			editedAudioData: await audioBlob.arrayBuffer(),
+			editedAudioData,
 			editedAudioMimeType: audioBlob.type || null,
 		};
+	}
+
+	private throwIfCancelled(): void {
+		if (this.cancelled) throw new Error("Export cancelled");
 	}
 
 	private async getNativeStaticLayoutAudioOptions(
@@ -2100,6 +2290,7 @@ export class ModernVideoExporter {
 		);
 	}
 
+	/** Build deterministic per-frame camera transforms for native compositors. */
 	private getNativeStaticLayoutZoomTelemetry(
 		layout: ReturnType<typeof computePaddedLayout>,
 		totalFrames: number,
@@ -2141,45 +2332,24 @@ export class ModernVideoExporter {
 
 		for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
 			const timeMs = frameIndex * frameDurationMs;
-			const { region, strength, blendedScale } = findDominantRegion(zoomRegions, timeMs, {
+			const target = resolveSceneZoomTarget({
+				zoomRegions,
+				timeMs,
 				connectZooms: this.config.connectZooms,
+				zoomInDurationMs: this.config.zoomInDurationMs,
+				zoomOutDurationMs: this.config.zoomOutDurationMs,
+				zoomClassicMode: this.config.zoomClassicMode,
+				cursorTelemetry: cursorTelemetry ?? [],
+				cursorFollowCamera,
 			});
-
-			let targetScale = 1;
-			let targetFocus = DEFAULT_FOCUS;
-			let targetProgress = 0;
-
-			if (region && strength > 0) {
-				const zoomScale = blendedScale ?? ZOOM_DEPTH_SCALES[region.depth];
-				let regionFocus = region.focus;
-				if (
-					!this.config.zoomClassicMode &&
-					region.mode !== "manual" &&
-					(cursorTelemetry?.length ?? 0) > 0
-				) {
-					regionFocus = computeCursorFollowFocus(
-						cursorFollowCamera,
-						cursorTelemetry ?? [],
-						timeMs,
-						zoomScale,
-						strength,
-						region.focus,
-						{ snapToEdgesRatio: SNAP_TO_EDGES_RATIO_AUTO },
-					);
-				}
-
-				targetScale = zoomScale;
-				targetFocus = regionFocus;
-				targetProgress = strength;
-			}
 
 			const projectedTransform = computeZoomTransform({
 				stageSize,
 				baseMask,
-				zoomScale: targetScale,
-				zoomProgress: targetProgress,
-				focusX: targetFocus.cx,
-				focusY: targetFocus.cy,
+				zoomScale: target.scale,
+				zoomProgress: target.progress,
+				focusX: target.focus.cx,
+				focusY: target.focus.cy,
 			});
 			const deltaMs =
 				lastContentTimeMs !== null ? timeMs - lastContentTimeMs : frameDurationMs;
@@ -2307,8 +2477,8 @@ export class ModernVideoExporter {
 			? null
 			: this.getNativeStaticLayoutSourceCrop(videoInfo);
 		const borderRadius = scalePreviewBorderRadius(
-			this.config.width,
-			this.config.height,
+			contentWidth,
+			contentHeight,
 			this.config.borderRadius ?? 0,
 		);
 		const shadowIntensity = this.config.showShadow
@@ -2463,6 +2633,7 @@ export class ModernVideoExporter {
 		);
 
 		try {
+			this.throwIfCancelled();
 			const result = await window.electronAPI.nativeStaticLayoutExport({
 				sessionId,
 				inputPath: sourcePath,
@@ -2482,7 +2653,11 @@ export class ModernVideoExporter {
 				sourceCropHeight: sourceCrop?.height,
 				backgroundColor: background.backgroundColor,
 				backgroundImagePath: background.backgroundImagePath ?? null,
-				backgroundBlurPx: Math.max(0, (this.config.backgroundBlur ?? 0) * 3),
+				backgroundBlurPx: getSceneEffectMetrics({
+					viewportWidth: this.config.width,
+					backgroundBlur: this.config.backgroundBlur ?? 0,
+					shadowIntensity: 0,
+				}).backgroundBlurPx,
 				borderRadius,
 				shadowIntensity,
 				webcamInputPath: webcamOverlay?.inputPath ?? null,
@@ -2669,6 +2844,7 @@ export class ModernVideoExporter {
 				this.queueNativeWriteChunk(sessionId, new Uint8Array(buffer));
 			},
 			error: (error) => {
+				if (this.nativeExportSessionId !== sessionId) return;
 				this.nativeEncoderError = error;
 				this.notifyEncodeCapacityAvailable();
 			},
@@ -2732,8 +2908,11 @@ export class ModernVideoExporter {
 			duration: frameDuration,
 			colorSpace: EXPORT_CANVAS_COLOR_SPACE,
 		});
-		this.nativeH264Encoder.encode(frame, { keyFrame: frameIndex % 300 === 0 });
-		frame.close();
+		try {
+			this.nativeH264Encoder.encode(frame, { keyFrame: frameIndex % 300 === 0 });
+		} finally {
+			frame.close();
+		}
 	}
 
 	private async finishNativeVideoExport(audioPlan: NativeAudioPlan): Promise<ExportResult> {
@@ -2771,6 +2950,7 @@ export class ModernVideoExporter {
 
 		this.flushPendingNativeWriteBatch(sessionId);
 		await this.awaitPendingNativeWrites();
+		this.throwIfCancelled();
 
 		const result = await this.measureFinalizationStage("nativeExportFinalizeMs", async () =>
 			this.awaitWithFinalizationTimeout(
@@ -2858,6 +3038,7 @@ export class ModernVideoExporter {
 			editedAudioMimeType = renderedAudio.editedAudioMimeType;
 		}
 
+		this.throwIfCancelled();
 		const muxOptions = {
 			audioMode: audioPlan.audioMode,
 			audioSourcePath:
@@ -2922,6 +3103,7 @@ export class ModernVideoExporter {
 			};
 		}
 		const videoBuffer = await videoSource.blob.arrayBuffer();
+		this.throwIfCancelled();
 		const result = await this.measureFinalizationStage("ffmpegAudioMuxMs", async () =>
 			this.awaitWithFinalizationTimeout(
 				window.electronAPI.muxExportedVideoAudio(videoBuffer, muxOptions),
@@ -3059,7 +3241,7 @@ export class ModernVideoExporter {
 				}
 			})
 			.catch((error) => {
-				if (!this.cancelled) {
+				if (!this.cancelled && this.nativeExportSessionId === sessionId) {
 					const resolvedError = error instanceof Error ? error : new Error(String(error));
 					if (!this.nativeEncoderError) {
 						this.nativeEncoderError = resolvedError;
@@ -3263,9 +3445,10 @@ export class ModernVideoExporter {
 			this.nativeWritePromises.size,
 		);
 
-		void writePromise.finally(() => {
+		const removeWrite = () => {
 			this.nativeWritePromises.delete(writePromise);
-		});
+		};
+		void writePromise.then(removeWrite, removeWrite);
 	}
 
 	private async awaitOldestNativeWrite(): Promise<void> {

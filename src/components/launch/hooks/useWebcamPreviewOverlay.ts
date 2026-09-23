@@ -17,6 +17,27 @@ export function useWebcamPreviewOverlay({
 	webcamPopoverOpen: boolean;
 	hudOverlayMousePassthroughSupported: boolean | null;
 }) {
+	const [editorMode, setEditorMode] = useState(true);
+	useEffect(() => {
+		let active = true;
+		let receivedEvent = false;
+		const unsubscribe = window.electronAPI.onEditorModeChanged((inEditor) => {
+			receivedEvent = true;
+			if (active) setEditorMode(inEditor);
+		});
+		void window.electronAPI
+			.getEditorMode()
+			.then((inEditor) => {
+				if (active && !receivedEvent) setEditorMode(inEditor);
+			})
+			.catch(() => {
+				/* Keep the camera off if editor mode is unknown. */
+			});
+		return () => {
+			active = false;
+			unsubscribe();
+		};
+	}, []);
 	const [showFloatingWebcamPreview, setShowFloatingWebcamPreview] = useState(true);
 	const [webcamPreviewOffset, setWebcamPreviewOffset] = useState(DEFAULT_WEBCAM_PREVIEW_OFFSET);
 	const webcamPreviewOffsetRef = useRef(DEFAULT_WEBCAM_PREVIEW_OFFSET);
@@ -46,7 +67,9 @@ export function useWebcamPreviewOverlay({
 			hudOverlayMousePassthroughSupported,
 		);
 	const shouldStreamWebcamPreview =
-		webcamEnabled && (showRecordingWebcamPreview || (showWebcamControls && webcamPopoverOpen));
+		!editorMode &&
+		webcamEnabled &&
+		(showRecordingWebcamPreview || (showWebcamControls && webcamPopoverOpen));
 
 	useEffect(() => {
 		if (!webcamEnabled) {

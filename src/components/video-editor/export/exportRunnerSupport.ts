@@ -1,6 +1,6 @@
 import type { RefObject } from "react";
 import { useCallback } from "react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/toast";
 import type { SupportedMp4Dimensions } from "@/lib/exporter";
 import type { useVideoEditorAudio } from "../audio/useVideoEditorAudio";
 import type { getSmokeExportConfig } from "../smokeExportConfig";
@@ -29,6 +29,7 @@ export type ExportRunnerInput = {
 	effectiveShowCursor: boolean;
 	ensureSupportedMp4SourceDimensions: (
 		frameRate: ReturnType<typeof useExportSettings>["mp4FrameRate"],
+		options?: { capTo1080p?: boolean },
 	) => Promise<SupportedMp4Dimensions>;
 	captionSidecarPayload?: PendingExportSave["captionSidecar"];
 	experimentalNvidiaCudaExport: boolean;

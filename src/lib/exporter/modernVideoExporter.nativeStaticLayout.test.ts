@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AudioRegion, SpeedRegion } from "@/components/video-editor/types";
+import type { AudioRegion, SpeedRegion, ZoomRegion } from "@/components/video-editor/types";
 import { ModernVideoExporter } from "./modernVideoExporter";
 import type { DecodedVideoInfo } from "./streamingDecoder";
 
@@ -70,6 +70,16 @@ function createExporter(overrides: Record<string, unknown> = {}) {
 			wallpaper: string,
 		) => CanvasGradient | null;
 		getNativeStaticLayoutCursorSize: (contentWidth: number) => number;
+		getNativeStaticLayoutZoomTelemetry: (
+			layout: {
+				centerOffsetX: number;
+				centerOffsetY: number;
+				croppedDisplayWidth: number;
+				croppedDisplayHeight: number;
+			},
+			totalFrames: number,
+			cursorTelemetry: undefined,
+		) => Array<{ timeMs: number; scale: number; x: number; y: number }> | undefined;
 	};
 }
 
@@ -78,6 +88,32 @@ afterEach(() => {
 });
 
 describe("ModernVideoExporter native static-layout eligibility", () => {
+	it("uses configured zoom transition durations for native telemetry", () => {
+		const zoomRegions: ZoomRegion[] = [
+			{
+				id: "zoom-1",
+				startMs: 0,
+				endMs: 4_000,
+				depth: 2,
+				focus: { cx: 0.5, cy: 0.5 },
+				mode: "manual",
+			},
+		];
+		const layout = {
+			centerOffsetX: 0,
+			centerOffsetY: 0,
+			croppedDisplayWidth: 1920,
+			croppedDisplayHeight: 1080,
+		};
+		const fastExporter = createExporter({ zoomRegions, zoomInDurationMs: 100 });
+		const slowExporter = createExporter({ zoomRegions, zoomInDurationMs: 2_000 });
+
+		const fastSamples = fastExporter.getNativeStaticLayoutZoomTelemetry(layout, 60, undefined);
+		const slowSamples = slowExporter.getNativeStaticLayoutZoomTelemetry(layout, 60, undefined);
+
+		expect(fastSamples?.[30].scale).toBeGreaterThan(slowSamples?.[30].scale ?? 0);
+	});
+
 	it("allows native static-layout eligibility for VP9/WebM sources so main can proxy them", () => {
 		const exporter = createExporter();
 

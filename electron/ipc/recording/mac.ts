@@ -23,7 +23,7 @@ import {
 	setNativeCaptureTargetPath,
 	setNativeScreenRecordingActive,
 } from "../state";
-import { isAutoRecordingPath, moveFileWithOverwrite } from "../utils";
+import { moveFileWithOverwrite } from "../utils";
 import {
 	getFileSizeIfPresent,
 	recordNativeCaptureDiagnostics,
@@ -31,7 +31,6 @@ import {
 } from "./diagnostics";
 import { emitRecordingInterrupted } from "./events";
 import { getFinalMacCompanionAudioPath } from "./macCompanionAudio";
-import { pruneAutoRecordings } from "./prune";
 
 export function waitForNativeCaptureStart(process: ChildProcessWithoutNullStreams) {
 	return new Promise<void>((resolve, reject) => {
@@ -269,9 +268,6 @@ export async function finalizeStoredVideo(videoPath: string) {
 		await persistPendingCursorTelemetry(videoPath);
 	} catch (error) {
 		console.warn("[mac-stop] Failed to persist cursor telemetry:", error);
-	}
-	if (isAutoRecordingPath(videoPath)) {
-		await pruneAutoRecordings([videoPath]);
 	}
 
 	if (

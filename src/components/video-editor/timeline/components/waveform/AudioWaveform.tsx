@@ -1,3 +1,4 @@
+import { useTheme } from "@/contexts/ThemeContext";
 import { useTimelineContext } from "dnd-timeline";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { AudioPeaksData } from "../../core/timelineTypes";
@@ -25,6 +26,7 @@ function AudioWaveformComponent({
 	className,
 }: AudioWaveformProps) {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const { theme } = useTheme();
 	const { range } = useTimelineContext();
 	const [resizeKey, setResizeKey] = useState(0);
 	const lastDrawAtRef = useRef(0);
@@ -108,13 +110,23 @@ function AudioWaveformComponent({
 				ctx.lineTo(px, midY + barHeight);
 			}
 
-			ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+			ctx.strokeStyle = theme === "dark" ? "rgba(255, 255, 255, 0.65)" : "rgba(0, 0, 0, 0.6)";
 			ctx.lineWidth = dpr;
 			ctx.stroke();
 		};
 		rafId = requestAnimationFrame(draw);
 		return () => cancelAnimationFrame(rafId);
-	}, [gain, normalize, peaks, range.start, range.end, resizeKey, segmentStartMs, segmentEndMs]);
+	}, [
+		gain,
+		normalize,
+		peaks,
+		range.start,
+		range.end,
+		resizeKey,
+		segmentStartMs,
+		segmentEndMs,
+		theme,
+	]);
 
 	return (
 		<canvas

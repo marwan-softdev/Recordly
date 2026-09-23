@@ -43,9 +43,6 @@ export function useVideoEditorPresets({
 			backgroundBlur: appearance.backgroundBlur,
 			zoomMotionBlur: appearance.zoomMotionBlur,
 			zoomMotionBlurTuning: { ...appearance.zoomMotionBlurTuning },
-			zoomTemporalMotionBlur: appearance.zoomTemporalMotionBlur,
-			zoomMotionBlurSampleCount: appearance.zoomMotionBlurSampleCount,
-			zoomMotionBlurShutterFraction: appearance.zoomMotionBlurShutterFraction,
 			connectZooms: appearance.connectZooms,
 			zoomInDurationMs: appearance.zoomInDurationMs,
 			zoomInOverlapMs: appearance.zoomInOverlapMs,
@@ -76,9 +73,11 @@ export function useVideoEditorPresets({
 			cursorClickBounceDuration: appearance.cursorClickBounceDuration,
 			cursorSway: appearance.cursorSway,
 			borderRadius: appearance.borderRadius,
+			borderRadiusUnit: "percent",
 			padding: { ...appearance.padding },
 			cropRegion: { ...appearance.cropRegion },
-			webcam: (({ sourcePath: _sourcePath, ...settings }) => settings)(appearance.webcam),
+			webcam: (({ sourcePath: _sourcePath, visibleRanges: _visibleRanges, ...settings }) =>
+				settings)(appearance.webcam),
 			aspectRatio,
 			exportEncodingMode: exportSettings.exportEncodingMode,
 			exportBackendPreference: exportSettings.exportBackendPreference,
@@ -110,9 +109,6 @@ export function useVideoEditorPresets({
 			appearance.setBackgroundBlur(snapshot.backgroundBlur);
 			appearance.setZoomMotionBlur(snapshot.zoomMotionBlur);
 			appearance.setZoomMotionBlurTuning({ ...snapshot.zoomMotionBlurTuning });
-			appearance.setZoomTemporalMotionBlur(snapshot.zoomTemporalMotionBlur);
-			appearance.setZoomMotionBlurSampleCount(snapshot.zoomMotionBlurSampleCount);
-			appearance.setZoomMotionBlurShutterFraction(snapshot.zoomMotionBlurShutterFraction);
 			appearance.setConnectZooms(snapshot.connectZooms);
 			appearance.setZoomInDurationMs(snapshot.zoomInDurationMs);
 			appearance.setZoomInOverlapMs(snapshot.zoomInOverlapMs);
@@ -148,6 +144,7 @@ export function useVideoEditorPresets({
 			appearance.setWebcam((current) => ({
 				...snapshot.webcam,
 				sourcePath: current.sourcePath,
+				visibleRanges: current.visibleRanges,
 			}));
 			setAspectRatio(snapshot.aspectRatio);
 			exportSettings.setExportEncodingMode(snapshot.exportEncodingMode);

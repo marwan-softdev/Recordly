@@ -134,6 +134,8 @@ export type WebcamPositionPreset =
 	| "custom";
 
 export interface WebcamOverlaySettings {
+	/** Source-time intervals containing webcam footage in an imported sequence. */
+	visibleRanges?: { startMs: number; endMs: number }[];
 	enabled: boolean;
 	sourcePath: string | null;
 	timeOffsetMs: number;
@@ -191,8 +193,8 @@ export const DEFAULT_ZOOM_OUT_EASING: ZoomTransitionEasing = "recordly";
 export const DEFAULT_CONNECTED_ZOOM_EASING: ZoomTransitionEasing = "glide";
 export const DEFAULT_WEBCAM_SIZE = 40;
 export const DEFAULT_WEBCAM_REACT_TO_ZOOM = true;
-export const DEFAULT_WEBCAM_ROUNDNESS = 42;
-export const DEFAULT_WEBCAM_SHADOW = 0.67;
+export const DEFAULT_WEBCAM_ROUNDNESS = 100;
+export const DEFAULT_WEBCAM_SHADOW = 0.3;
 export const DEFAULT_WEBCAM_MARGIN = 24;
 export const DEFAULT_WEBCAM_POSITION_PRESET: WebcamPositionPreset = "bottom-right";
 export const DEFAULT_WEBCAM_POSITION_X = 1;
@@ -226,17 +228,32 @@ export interface TrimRegion {
 
 export interface ClipRegion {
 	id: string;
+	/** Where the clip sits on the timeline. */
 	startMs: number;
+	/** Where the clip ends on the timeline (`startMs` + source duration / speed). */
 	endMs: number;
+	/**
+	 * Where the clip reads from in the recording. Defaults to `startMs`, which is
+	 * only the same thing while everything before it plays at 1x — splitting or
+	 * left-trimming a sped-up clip moves the source in without moving the clip.
+	 */
+	sourceStartMs?: number;
+	/** Bounds of this recording within the shared media source. */
+	sourceMinMs?: number;
+	sourceMaxMs?: number;
 	speed: number;
 	muted?: boolean;
 	showSourceAudio?: boolean;
 }
 
+export function getClipSourceStartMs(clip: ClipRegion): number {
+	return Number.isFinite(clip.sourceStartMs) ? (clip.sourceStartMs as number) : clip.startMs;
+}
+
 export function getClipSourceEndMs(clip: ClipRegion): number {
 	const displayDurationMs = Math.max(0, clip.endMs - clip.startMs);
 	const speed = Number.isFinite(clip.speed) && clip.speed > 0 ? clip.speed : 1;
-	return Math.round(clip.startMs + displayDurationMs * speed);
+	return Math.round(getClipSourceStartMs(clip) + displayDurationMs * speed);
 }
 
 export function getTimelineDurationMs(clips: ClipRegion[], sourceDurationMs: number): number {
@@ -247,7 +264,7 @@ export function getTimelineDurationMs(clips: ClipRegion[], sourceDurationMs: num
 
 	return clips.reduce(
 		(durationMs, clip) => Math.max(durationMs, Math.max(0, Math.round(clip.endMs))),
-		baseDurationMs,
+		0,
 	);
 }
 
@@ -259,25 +276,22 @@ function getSafeClipSpeed(clip: ClipRegion) {
 	return Number.isFinite(clip.speed) && clip.speed > 0 ? clip.speed : 1;
 }
 
-function clampToNearestClipBoundary(
-	timeMs: number,
-	clips: ClipRegion[],
-	kind: "timeline" | "source",
-) {
+function mapNearestClipBoundary(timeMs: number, clips: ClipRegion[], from: "timeline" | "source") {
 	let nearestTimeMs = Math.round(timeMs);
 	let nearestDistance = Number.POSITIVE_INFINITY;
 
 	for (const clip of clips) {
-		const boundaries =
-			kind === "timeline"
-				? [clip.startMs, clip.endMs]
-				: [clip.startMs, getClipSourceEndMs(clip)];
+		const boundaries = [
+			[clip.startMs, getClipSourceStartMs(clip)],
+			[clip.endMs, getClipSourceEndMs(clip)],
+		];
 
-		for (const boundary of boundaries) {
-			const distance = Math.abs(timeMs - boundary);
+		for (const [timelineTimeMs, sourceTimeMs] of boundaries) {
+			const inputTimeMs = from === "timeline" ? timelineTimeMs : sourceTimeMs;
+			const distance = Math.abs(timeMs - inputTimeMs);
 			if (distance < nearestDistance) {
 				nearestDistance = distance;
-				nearestTimeMs = Math.round(boundary);
+				nearestTimeMs = Math.round(from === "timeline" ? sourceTimeMs : timelineTimeMs);
 			}
 		}
 	}
@@ -290,18 +304,20 @@ export function mapTimelineTimeToSourceTime(timeMs: number, clips: ClipRegion[])
 	const sortedClips = sortClipRegions(clips);
 
 	for (const clip of sortedClips) {
-		if (roundedTimeMs < clip.startMs || roundedTimeMs > clip.endMs) {
+		if (timeMs < clip.startMs || timeMs >= clip.endMs) {
 			continue;
 		}
 
-		return Math.round(clip.startMs + (roundedTimeMs - clip.startMs) * getSafeClipSpeed(clip));
+		return Math.round(
+			getClipSourceStartMs(clip) + (roundedTimeMs - clip.startMs) * getSafeClipSpeed(clip),
+		);
 	}
 
 	if (sortedClips.length === 0) {
 		return roundedTimeMs;
 	}
 
-	return clampToNearestClipBoundary(roundedTimeMs, sortedClips, "timeline");
+	return mapNearestClipBoundary(roundedTimeMs, sortedClips, "timeline");
 }
 
 export function mapSourceTimeToTimelineTime(timeMs: number, clips: ClipRegion[]): number {
@@ -309,27 +325,25 @@ export function mapSourceTimeToTimelineTime(timeMs: number, clips: ClipRegion[])
 	const sortedClips = sortClipRegions(clips);
 
 	for (const clip of sortedClips) {
+		const sourceStartMs = getClipSourceStartMs(clip);
 		const sourceEndMs = getClipSourceEndMs(clip);
-		if (roundedTimeMs < clip.startMs || roundedTimeMs > sourceEndMs) {
+		if (timeMs < sourceStartMs || timeMs >= sourceEndMs) {
 			continue;
 		}
 
-		return Math.round(clip.startMs + (roundedTimeMs - clip.startMs) / getSafeClipSpeed(clip));
+		return Math.round(clip.startMs + (roundedTimeMs - sourceStartMs) / getSafeClipSpeed(clip));
 	}
 
 	if (sortedClips.length === 0) {
 		return roundedTimeMs;
 	}
 
-	return clampToNearestClipBoundary(roundedTimeMs, sortedClips, "source");
+	return mapNearestClipBoundary(roundedTimeMs, sortedClips, "source");
 }
 
 export function findClipAtTimelineTime(timeMs: number, clips: ClipRegion[]): ClipRegion | null {
-	const roundedTimeMs = Math.round(timeMs);
 	return (
-		sortClipRegions(clips).find(
-			(clip) => roundedTimeMs >= clip.startMs && roundedTimeMs < clip.endMs,
-		) ?? null
+		sortClipRegions(clips).find((clip) => timeMs >= clip.startMs && timeMs < clip.endMs) ?? null
 	);
 }
 
@@ -365,15 +379,24 @@ export function extendAutoFullTrackClip(
 /** Convert clip regions (kept segments) to trim regions (gaps to remove). */
 export function clipsToTrims(clips: ClipRegion[], totalDurationMs: number): TrimRegion[] {
 	if (clips.length === 0) return [];
-	const sorted = [...clips].sort((a, b) => a.startMs - b.startMs);
+	// Clips are ordered on the timeline, but a moved clip keeps its source
+	// in-point, so timeline order says nothing about source order. Walk the
+	// source ranges the clips claim and trim whatever is left uncovered.
+	const coveredSpans = clips
+		.map((clip) => ({
+			startMs: getClipSourceStartMs(clip),
+			endMs: getClipSourceEndMs(clip),
+		}))
+		.filter((span) => span.endMs > span.startMs)
+		.sort((left, right) => left.startMs - right.startMs);
 	const trims: TrimRegion[] = [];
 	let cursor = 0;
 	let trimId = 1;
-	for (const clip of sorted) {
-		if (clip.startMs > cursor) {
-			trims.push({ id: `trim-gap-${trimId++}`, startMs: cursor, endMs: clip.startMs });
+	for (const span of coveredSpans) {
+		if (span.startMs > cursor) {
+			trims.push({ id: `trim-gap-${trimId++}`, startMs: cursor, endMs: span.startMs });
 		}
-		cursor = getClipSourceEndMs(clip);
+		cursor = Math.max(cursor, span.endMs);
 	}
 	if (cursor < totalDurationMs) {
 		trims.push({ id: `trim-gap-${trimId++}`, startMs: cursor, endMs: totalDurationMs });
@@ -624,7 +647,7 @@ export const ZOOM_DEPTH_SCALES: Record<ZoomDepth, number> = {
 };
 
 export const DEFAULT_ZOOM_DEPTH: ZoomDepth = 3;
-export const DEFAULT_AUTO_ZOOM_DEPTH: ZoomDepth = 2;
+export const DEFAULT_AUTO_ZOOM_DEPTH: ZoomDepth = DEFAULT_ZOOM_DEPTH;
 
 export function clampFocusToDepth(focus: ZoomFocus, _depth: ZoomDepth): ZoomFocus {
 	return {

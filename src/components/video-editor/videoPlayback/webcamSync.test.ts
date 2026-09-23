@@ -3,6 +3,7 @@ import {
 	getWebcamMediaTargetTimeSeconds,
 	getWebcamPreviewTargetTimeSeconds,
 	isWebcamMediaSynchronized,
+	isWebcamVisibleAtSourceTime,
 	shouldSeekWebcamMedia,
 } from "./webcamSync";
 
@@ -138,5 +139,18 @@ describe("isWebcamMediaSynchronized", () => {
 				isSeeking: false,
 			}),
 		).toBe(false);
+	});
+});
+
+
+describe("imported webcam visibility", () => {
+	it("hides screen-only spans and uses source-time boundaries", () => {
+		const webcam = { visibleRanges: [{ startMs: 1200, endMs: 2000 }, { startMs: 4000, endMs: 5000 }] };
+		expect(isWebcamVisibleAtSourceTime(webcam, 1)).toBe(false);
+		expect(isWebcamVisibleAtSourceTime(webcam, 1.2)).toBe(true);
+		expect(isWebcamVisibleAtSourceTime(webcam, 2)).toBe(false);
+		expect(isWebcamVisibleAtSourceTime(webcam, 4.5)).toBe(true);
+		expect(isWebcamVisibleAtSourceTime({ visibleRanges: [] }, 0)).toBe(false);
+		expect(isWebcamVisibleAtSourceTime({}, 0)).toBe(true);
 	});
 });

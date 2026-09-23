@@ -1,6 +1,6 @@
 import { type RefObject, useCallback } from "react";
-import { toast } from "sonner";
-import type { ExportSettings } from "@/lib/exporter";
+import { toast } from "@/components/ui/toast";
+import type { ExportFormat, ExportSettings } from "@/lib/exporter";
 import { resolveExportStartSettings } from "../exportStartSettings";
 import type { VideoPlaybackRef } from "../VideoPlayback";
 import type { useExportSession } from "./useExportSession";
@@ -15,7 +15,10 @@ type UseExportDialogActionsInput = {
 	hasCaptionsForSidecar: boolean;
 	settings: ExportSettingsState;
 	session: ExportSession;
-	handleExport: (settings: ExportSettings) => void;
+	handleExport: (
+		settings: ExportSettings,
+		options?: { destination?: "download" | "share" },
+	) => Promise<string | undefined>;
 	showExportSuccessToast: (filePath: string) => void;
 };
 
@@ -44,47 +47,66 @@ export function useExportDialogActions({
 		session.setShowExportDropdown(true);
 		session.setExportProgress(null);
 		session.setExportError(null);
+		session.setExportedFilePath(undefined);
 	}, [videoPath, session]);
 
+	const resolveCurrentSettings = useCallback(
+		(exportFormat: ExportFormat = settings.exportFormat) => {
+			const video = videoPlaybackRef.current?.video;
+			if (!videoPath) {
+				toast.error("No video loaded");
+				return null;
+			}
+			if (!video) {
+				toast.error("Video not ready");
+				return null;
+			}
+			if (video.videoWidth <= 0 || video.videoHeight <= 0) {
+				toast.error("Video metadata is still loading");
+				return null;
+			}
+
+			return resolveExportStartSettings({
+				sourceWidth: video.videoWidth,
+				sourceHeight: video.videoHeight,
+				exportFormat,
+				includeCaptionSidecar: hasCaptionsForSidecar && settings.includeCaptionSidecar,
+				exportEncodingMode: settings.exportEncodingMode,
+				exportQuality: settings.exportQuality,
+				mp4FrameRate: settings.mp4FrameRate,
+				exportBackendPreference: settings.exportBackendPreference,
+				exportPipelineModel: settings.exportPipelineModel,
+				gifFrameRate: settings.gifFrameRate,
+				gifLoop: settings.gifLoop,
+				gifSizePreset: settings.gifSizePreset,
+			});
+		},
+		[videoPath, videoPlaybackRef, hasCaptionsForSidecar, settings],
+	);
+
 	const handleStartExportFromDropdown = useCallback(() => {
-		const video = videoPlaybackRef.current?.video;
-		if (!videoPath) {
-			toast.error("No video loaded");
-			return;
-		}
-		if (!video) {
-			toast.error("Video not ready");
-			return;
-		}
-		if (video.videoWidth <= 0 || video.videoHeight <= 0) {
-			toast.error("Video metadata is still loading");
-			return;
-		}
-
-		const resolvedSettings = resolveExportStartSettings({
-			sourceWidth: video.videoWidth,
-			sourceHeight: video.videoHeight,
-			exportFormat: settings.exportFormat,
-			includeCaptionSidecar: hasCaptionsForSidecar && settings.includeCaptionSidecar,
-			exportEncodingMode: settings.exportEncodingMode,
-			exportQuality: settings.exportQuality,
-			mp4FrameRate: settings.mp4FrameRate,
-			exportBackendPreference: settings.exportBackendPreference,
-			exportPipelineModel: settings.exportPipelineModel,
-			gifFrameRate: settings.gifFrameRate,
-			gifLoop: settings.gifLoop,
-			gifSizePreset: settings.gifSizePreset,
-		});
-
+		const resolvedSettings = resolveCurrentSettings();
+		if (!resolvedSettings) return;
 		session.setExportError(null);
 		session.setExportedFilePath(undefined);
 		session.setShowExportDropdown(true);
-		handleExport(resolvedSettings);
-	}, [videoPath, videoPlaybackRef, hasCaptionsForSidecar, settings, session, handleExport]);
+		void handleExport(resolvedSettings, { destination: "download" });
+	}, [resolveCurrentSettings, session, handleExport]);
+
+	const prepareExportForShare = useCallback(async () => {
+		const resolvedSettings = resolveCurrentSettings("mp4");
+		if (!resolvedSettings) return undefined;
+		session.setExportError(null);
+		session.setShowExportDropdown(false);
+		return handleExport(resolvedSettings, { destination: "share" });
+	}, [resolveCurrentSettings, session, handleExport]);
 
 	const handleCancelExport = useCallback(() => {
-		if (!session.exporterRef.current) return;
-		session.exporterRef.current.cancel();
+		if (!session.isExporting) return;
+		session.cancelledExportRunIdRef.current = session.exportRunIdRef.current;
+		session.exportRunIdRef.current += 1;
+		session.exporterRef.current?.cancel();
+		session.exporterRef.current = null;
 		toast.info("Export canceled");
 		session.clearPendingExportSave();
 		session.setShowExportDropdown(false);
@@ -99,7 +121,6 @@ export function useExportDialogActions({
 		session.setShowExportDropdown(false);
 		session.setExportProgress(null);
 		session.setExportError(null);
-		session.setExportedFilePath(undefined);
 	}, [session]);
 
 	const handleRetrySaveExport = useCallback(async () => {
@@ -158,6 +179,7 @@ export function useExportDialogActions({
 	return {
 		handleOpenExportDropdown,
 		handleStartExportFromDropdown,
+		prepareExportForShare,
 		handleCancelExport,
 		handleExportDropdownClose,
 		handleRetrySaveExport,

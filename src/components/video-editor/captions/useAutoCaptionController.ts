@@ -1,5 +1,5 @@
 import { type Dispatch, type SetStateAction, useCallback, useEffect, useRef } from "react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/toast";
 import { resolveAutoCaptionSourcePath } from "../autoCaptionSource";
 import { type CaptionEditTarget, updateCaptionCuesForEditedTarget } from "../captionEditing";
 import { resolveVideoUrl } from "../projectPersistence";
@@ -61,6 +61,8 @@ export function useAutoCaptionController({
 	syncActiveVideoSource,
 }: UseAutoCaptionControllerParams) {
 	const captionGenerationInFlightRef = useRef(false);
+	const activeSourceRef = useRef({ videoSourcePath, videoPath });
+	activeSourceRef.current = { videoSourcePath, videoPath };
 
 	useEffect(() => {
 		const unsubscribe = window.electronAPI.onWhisperSmallModelDownloadProgress((state) => {
@@ -158,6 +160,10 @@ export function useAutoCaptionController({
 		captionGenerationInFlightRef.current = true;
 		setIsGeneratingCaptions(true);
 		try {
+			if (!whisperModelPath) {
+				toast.error("Select a Whisper model or download the small model first");
+				return;
+			}
 			let sourcePath = resolveAutoCaptionSourcePath({ videoSourcePath, videoPath });
 			if (!sourcePath) {
 				const sessionResult = await window.electronAPI.getCurrentRecordingSession?.();
@@ -176,22 +182,22 @@ export function useAutoCaptionController({
 				toast.error("No source video is loaded");
 				return;
 			}
-			await syncActiveVideoSource(sourcePath, webcamSourcePath);
+			// Refreshing an unchanged session revokes active companion-audio URLs.
 			if (sourcePath !== videoSourcePath) {
+				await syncActiveVideoSource(sourcePath, webcamSourcePath);
 				setVideoSourcePath(sourcePath);
 				setVideoPath(await resolveVideoUrl(sourcePath));
 			}
-			if (!whisperModelPath) {
-				toast.error("Select a Whisper model or download the small model first");
-				return;
-			}
-
 			const result = await window.electronAPI.generateAutoCaptions({
 				videoPath: sourcePath,
 				whisperExecutablePath: whisperExecutablePath ?? undefined,
 				whisperModelPath,
 				language: autoCaptionSettings.language,
 			});
+			if (resolveAutoCaptionSourcePath(activeSourceRef.current) !== sourcePath) {
+				toast.info("Recording changed; generated captions were not applied.");
+				return;
+			}
 			if (!result.success || !result.cues) {
 				const errorMessage = result.error ? getErrorMessage(result.error) : result.message;
 				toast.error(errorMessage || "Failed to generate captions");

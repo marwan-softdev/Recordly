@@ -52,9 +52,9 @@ type Input = {
 	setWhisperModelDownloadProgress: Dispatch<SetStateAction<number>>;
 	isGeneratingCaptions: boolean;
 	setIsGeneratingCaptions: Dispatch<SetStateAction<boolean>>;
-	videoPlaybackRef: RefObject<VideoPlaybackRef>;
-	projectNameInputRef: RefObject<HTMLInputElement>;
-	projectSaveDialogInputRef: RefObject<HTMLInputElement>;
+	videoPlaybackRef: RefObject<VideoPlaybackRef | null>;
+	projectNameInputRef: RefObject<HTMLInputElement | null>;
+	projectSaveDialogInputRef: RefObject<HTMLInputElement | null>;
 	nextZoomIdRef: MutableRefObject<number>;
 	nextClipIdRef: MutableRefObject<number>;
 	nextAudioIdRef: MutableRefObject<number>;
