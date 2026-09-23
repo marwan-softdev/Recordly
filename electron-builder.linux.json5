@@ -4,7 +4,22 @@
 // LINUX-CURSOR-WORKLOG.md "SHELVED — GPU-accelerated exports"). Everything
 // else inherits from electron-builder.json5; the electron dependency in
 // package.json stays on 43 for dev/Windows/macOS.
+//
+// Targets: AppImage for distros without the Ubuntu userns restriction, plus
+// deb/rpm for Ubuntu 23.10+/Fedora where the AppImage's Chromium sandbox is
+// AppArmor-blocked — the deb/rpm install to a fixed path and carry maintainer
+// scripts (build/linux-after-install.sh) that grant the sandbox permission.
 {
 	extends: "electron-builder.json5",
 	electronVersion: "39.2.7",
+	linux: {
+		target: ["AppImage", "deb", "rpm"],
+		// deb/rpm metadata requires a named maintainer; package.json's author
+		// ("webadderall") carries no email, so use GitHub's no-reply form.
+		maintainer: "webadderall <webadderall@users.noreply.github.com>",
+	},
+	deb: {
+		afterInstall: "build/linux-after-install.sh",
+		afterRemove: "build/linux-after-remove.sh",
+	},
 }
