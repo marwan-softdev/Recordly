@@ -21,6 +21,7 @@
 #include <X11/Xlib.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -106,6 +107,21 @@ static const CursorCandidate CURSOR_CANDIDATES[] = {
 #define CANDIDATE_COUNT (sizeof(CURSOR_CANDIDATES) / sizeof(CURSOR_CANDIDATES[0]))
 
 static volatile bool g_running = true;
+static bool g_debug = false;
+
+/* Debug helper: RECORDLY_CURSOR_DEBUG=1 prints shape-matching evidence to
+ * stderr (theme name, loaded references, live-vs-reference mismatches). The
+ * app drains stderr, so run the helper from a terminal to see the output. */
+static void dbg(const char *format, ...) {
+	if (!g_debug) {
+		return;
+	}
+	va_list args;
+	va_start(args, format);
+	vfprintf(stderr, format, args);
+	va_end(args);
+	fputc('\n', stderr);
+}
 
 static void *stdin_listener(void *unused) {
 	(void)unused;
@@ -173,6 +189,37 @@ static const char *cursor_type_for_image(const RecordlyXFixesCursorImage *live) 
 			}
 		}
 	}
+	/* Debug evidence for a no-match, printed once per distinct cursor
+	 * geometry so a terminal session doesn't flood at the 50 ms cadence. */
+	static uint32_t last_w = 0;
+	static uint32_t last_h = 0;
+	static uint32_t last_xhot = 0;
+	static uint32_t last_yhot = 0;
+	if (live->width != last_w || live->height != last_h ||
+		(uint32_t)live->xhot != last_xhot || (uint32_t)live->yhot != last_yhot) {
+		last_w = live->width;
+		last_h = live->height;
+		last_xhot = (uint32_t)live->xhot;
+		last_yhot = (uint32_t)live->yhot;
+		dbg("no-match: live %ux%u hot(%d,%d); loaded references:", live->width, live->height,
+			live->xhot, live->yhot);
+		for (size_t i = 0; i < CANDIDATE_COUNT; i++) {
+			const RecordlyXcursorImages *refs = g_references[i];
+			if (refs == NULL) {
+				continue;
+			}
+			const RecordlyXcursorImage *first = refs->nimage > 0 ? refs->images[0] : NULL;
+			dbg("  %s: %d frame(s)%s", CURSOR_CANDIDATES[i].xcursor_name, refs->nimage,
+				first != NULL ? "" : " (empty)");
+			if (first != NULL) {
+				dbg("    first frame %ux%u hot(%u,%u)", first->width, first->height, first->xhot,
+					first->yhot);
+			}
+		}
+		if (last_w != 0) {
+			dbg("(further identical no-matches suppressed until the cursor changes)");
+		}
+	}
 	return "arrow";
 }
 
@@ -201,15 +248,23 @@ static void load_reference_cursors(Display *display, uint32_t size,
 	 * default theme. */
 	char *theme = get_theme != NULL ? get_theme(display) : NULL;
 
+	size_t loaded = 0;
 	for (size_t i = 0; i < CANDIDATE_COUNT; i++) {
 		g_references[i] = load_images(CURSOR_CANDIDATES[i].xcursor_name, theme, (int)size);
+		if (g_references[i] != NULL && g_references[i]->nimage > 0) {
+			loaded++;
+		}
 	}
+	dbg("reference reload at size %u: theme=%s, %zu/%d candidates loaded", size,
+		theme != NULL ? theme : "(null → default theme)", loaded, (int)CANDIDATE_COUNT);
 
 	g_reference_size = size;
 }
 
 int main(void) {
 	setvbuf(stdout, NULL, _IONBF, 0);
+	g_debug = getenv("RECORDLY_CURSOR_DEBUG") != NULL;
+	dbg("debug enabled (pid %d)", getpid());
 
 	Display *display = XOpenDisplay(NULL);
 	if (display == NULL) {
@@ -238,6 +293,8 @@ int main(void) {
 	if (query_extension == NULL || get_cursor_image == NULL ||
 		!query_extension(display, &event_base, &error_base)) {
 		/* Position tracking still works without XFixes; shape stays "arrow". */
+		dbg("XFixes unavailable (query=%p, get=%p) — shape will stay \"arrow\"",
+			(void *)query_extension, (void *)get_cursor_image);
 		get_cursor_image = NULL;
 	}
 
@@ -251,6 +308,7 @@ int main(void) {
 		get_theme = (XcursorGetThemeFn)dlsym(xcursor, "XcursorGetTheme");
 	}
 	if (load_images == NULL || destroy_images == NULL) {
+		dbg("libXcursor load/destroy symbols missing — shape will stay \"arrow\"");
 		load_images = NULL;
 		destroy_images = NULL;
 	}
@@ -297,6 +355,12 @@ int main(void) {
 					printf("STATE:%s\n", type);
 				}
 				XFree(image);
+			} else {
+				static bool warned_image_null = false;
+				if (!warned_image_null) {
+					warned_image_null = true;
+					dbg("XFixesGetCursorImage returned NULL");
+				}
 			}
 		}
 
