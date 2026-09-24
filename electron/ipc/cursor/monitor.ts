@@ -80,6 +80,11 @@ export function handleCursorMonitorStdout(chunk: Buffer) {
 }
 
 export function stopNativeCursorMonitor() {
+	intentionalStop = true;
+	if (respawnTimer !== null) {
+		clearTimeout(respawnTimer);
+		respawnTimer = null;
+	}
 	setCurrentCursorVisualType("arrow");
 
 	if (!nativeCursorMonitorProcess) {
@@ -101,10 +106,53 @@ export function stopNativeCursorMonitor() {
 	setNativeCursorMonitorOutputBuffer("");
 }
 
-export async function startNativeCursorMonitor() {
-	stopNativeCursorMonitor();
+/* The helper owns shape detection for the whole recording; if it crashes, the
+ * cursor used to stay "arrow" until the next recording started. Respawn after
+ * an unexpected close, with growing delays so a helper that dies on startup
+ * cannot spin; a healthy run longer than HEALTHY_UPTIME resets the ladder. */
+const CURSOR_MONITOR_RESPAWN_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
+const CURSOR_MONITOR_HEALTHY_UPTIME_MS = 10_000;
 
-	if (process.platform !== "darwin" && process.platform !== "win32" && process.platform !== "linux") {
+let intentionalStop = false;
+let respawnAttempts = 0;
+let respawnTimer: ReturnType<typeof setTimeout> | null = null;
+let spawnStartedAtMs = 0;
+
+function scheduleCursorMonitorRespawn() {
+	if (intentionalStop || respawnTimer !== null || nativeCursorMonitorProcess !== null) {
+		return;
+	}
+	if (spawnStartedAtMs > 0 && Date.now() - spawnStartedAtMs >= CURSOR_MONITOR_HEALTHY_UPTIME_MS) {
+		respawnAttempts = 0;
+	}
+	if (respawnAttempts >= CURSOR_MONITOR_RESPAWN_DELAYS_MS.length) {
+		console.warn(
+			"Cursor monitor helper keeps crashing; not respawning until the next recording.",
+		);
+		return;
+	}
+	const delayMs = CURSOR_MONITOR_RESPAWN_DELAYS_MS[respawnAttempts];
+	respawnAttempts += 1;
+	respawnTimer = setTimeout(() => {
+		respawnTimer = null;
+		void startNativeCursorMonitor(false);
+	}, delayMs);
+}
+
+/* resetRespawnLadder is false for respawns: the crash ladder must survive
+ * across them or the give-up cap can never be reached. */
+export async function startNativeCursorMonitor(resetRespawnLadder = true) {
+	stopNativeCursorMonitor();
+	intentionalStop = false;
+	if (resetRespawnLadder) {
+		respawnAttempts = 0;
+	}
+
+	if (
+		process.platform !== "darwin" &&
+		process.platform !== "win32" &&
+		process.platform !== "linux"
+	) {
 		setCurrentCursorVisualType("arrow");
 		return;
 	}
@@ -152,6 +200,7 @@ export async function startNativeCursorMonitor() {
 		}
 
 		setNativeCursorMonitorProcess(proc as Parameters<typeof setNativeCursorMonitorProcess>[0]);
+		spawnStartedAtMs = Date.now();
 		const spawned = proc;
 		if (!spawned) {
 			setNativeCursorMonitorProcess(null);
@@ -181,6 +230,7 @@ export async function startNativeCursorMonitor() {
 				setNativeCursorMonitorOutputBuffer("");
 				setCurrentCursorVisualType("arrow");
 			}
+			scheduleCursorMonitorRespawn();
 		});
 	} catch (error) {
 		console.warn("Failed to start native cursor monitor:", error);

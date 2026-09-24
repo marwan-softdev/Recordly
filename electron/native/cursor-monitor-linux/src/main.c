@@ -194,15 +194,17 @@ static void load_reference_cursors(Display *display, uint32_t size,
 	}
 	free_reference_cursors(destroy_images);
 
+	/* XcursorGetTheme returns a string owned by libXcursor — the caller must
+	 * NOT free it (unlike the XFixes cursor image, which is X-allocated and
+	 * needs XFree). Freeing it corrupts the library's heap and kills this
+	 * process the moment the cursor size changes; NULL just means the
+	 * default theme. */
 	char *theme = get_theme != NULL ? get_theme(display) : NULL;
 
 	for (size_t i = 0; i < CANDIDATE_COUNT; i++) {
 		g_references[i] = load_images(CURSOR_CANDIDATES[i].xcursor_name, theme, (int)size);
 	}
 
-	if (theme != NULL) {
-		XFree(theme);
-	}
 	g_reference_size = size;
 }
 
