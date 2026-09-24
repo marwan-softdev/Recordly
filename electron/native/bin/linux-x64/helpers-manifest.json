@@ -5,10 +5,10 @@
   "helpers": {
     "cursor-monitor": {
       "binaryName": "cursor-monitor",
-      "binarySha256": "0675eb4834ec16e03907d0b2f4b3828acdf118c2037741256facb00de17c3b89",
+      "binarySha256": "f65e3ccde3067b52c62bb341afb03779a2a0341e2e58d4ea8219ba84911baf32",
       "sourceDir": "electron/native/cursor-monitor-linux",
-      "sourceFingerprint": "914396142738c94a4cf7ef0abaa20a9d9e29d9ee4bdc3306cc3b77501fdca1b2",
-      "updatedAt": "2026-09-04T13:07:11.597Z"
+      "sourceFingerprint": "cb38ae7c91e0fc6a0ef73258beb0f7cdebb6f63dd20a2039649b769cd3cded5f",
+      "updatedAt": "2026-09-24T12:33:52.837Z"
     }
   }
 }
