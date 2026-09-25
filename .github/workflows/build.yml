@@ -175,11 +175,10 @@ jobs:
 
       - name: Build Linux app
         run: |
-          sudo apt-get update && sudo apt-get install -y rpm
           npm run build:platform-native-helpers
           npx tsc
           npx vite build
-          npx electron-builder --linux dir AppImage deb rpm --x64 --config electron-builder.linux.json5 --publish never
+          npx electron-builder --linux dir AppImage --x64 --config electron-builder.linux.json5 --publish never
 
       - name: Smoke test packaged Linux paths
         run: npm run smoke:packaged-binaries
@@ -198,8 +197,6 @@ jobs:
           name: linux-x64-release
           path: |
             release/**/*.AppImage
-            release/**/*.deb
-            release/**/*.rpm
             release/**/*.blockmap
             release/latest-linux.yml
             release/SHA256SUMS*.txt
