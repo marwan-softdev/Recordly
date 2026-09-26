@@ -36,7 +36,7 @@ export function useLaunchWindowSystemState(
 			try {
 				const visibility = await window.electronAPI.getSourcePickerVisibility();
 				if (!cancelled) setShowSourcePicker(visibility.show);
-			} catch (error) {
+			} catch {
 				// Without an answer the safe default is to show the picker —
 				// on portal-less X11 it is the only working capture path.
 				if (!cancelled) setShowSourcePicker(true);
