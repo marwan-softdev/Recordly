@@ -1,5 +1,6 @@
 {
 	"recording": {
+		"home": "Início",
 		"disableSystemAudio": "Desativar áudio do sistema",
 		"enableSystemAudio": "Ativar áudio do sistema",
 		"disableMicrophone": "Desativar microfone",

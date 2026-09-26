@@ -1,3 +1,5 @@
+import { Skeleton } from "@/components/ui/skeleton";
+import { Slider } from "@/components/ui/slider";
 import {
 	CaretDown,
 	Check,
@@ -13,9 +15,10 @@ import {
 	SpeakerHigh,
 	SpeakerLow,
 	SpeakerX,
-} from "@phosphor-icons/react";
+} from "@/components/ui/icons";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -43,8 +46,8 @@ type Props = {
 	aspectRatio: AspectRatio;
 	setAspectRatio: Dispatch<SetStateAction<AspectRatio>>;
 	previewAspectRatioValue: number;
-	videoPlaybackRef: RefObject<VideoPlaybackRef>;
-	timelineRef: RefObject<TimelineEditorHandle>;
+	videoPlaybackRef: RefObject<VideoPlaybackRef | null>;
+	timelineRef: RefObject<TimelineEditorHandle | null>;
 	currentTime: number;
 	isPlaying: boolean;
 	previewVolume: number;
@@ -64,10 +67,11 @@ type Props = {
 	handleSaveAutoCaptionEdit: (target: CaptionEditTarget, text: string) => void;
 	handleSelectAnnotation: (id: string | null) => void;
 	setDuration: Dispatch<SetStateAction<number>>;
+	isPreviewReady: boolean;
 	setIsPreviewReady: Dispatch<SetStateAction<boolean>>;
 	setCurrentTime: Dispatch<SetStateAction<number>>;
 	setIsPlaying: Dispatch<SetStateAction<boolean>>;
-	setError: Dispatch<SetStateAction<string | null>>;
+	setError: (message: string | null) => void;
 };
 
 function formatTime(seconds: number) {
@@ -106,6 +110,7 @@ export function EditorPreviewPanel(props: Props) {
 		handleSaveAutoCaptionEdit,
 		handleSelectAnnotation,
 		setDuration,
+		isPreviewReady,
 		setIsPreviewReady,
 		setCurrentTime,
 		setIsPlaying,
@@ -113,16 +118,16 @@ export function EditorPreviewPanel(props: Props) {
 	} = props;
 
 	return (
-		<div className="flex min-h-0 flex-1 flex-col gap-3">
+		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 			<div className="flex min-h-0 flex-1 flex-col">
 				<div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-					<div className="flex flex-shrink-0 items-center justify-center gap-2 py-1.5">
+					<div className="flex h-10 shrink-0 items-center justify-center gap-3">
 						<DropdownMenu>
 							<DropdownMenuTrigger asChild>
 								<Button
 									variant="ghost"
 									size="sm"
-									className="h-7 gap-1 px-2 text-xs text-muted-foreground transition-all hover:bg-foreground/10 hover:text-foreground"
+									className="h-7 gap-1 px-2 text-xs"
 								>
 									<span className="font-medium">
 										{getAspectRatioLabel(aspectRatio)}
@@ -130,10 +135,7 @@ export function EditorPreviewPanel(props: Props) {
 									<CaretDown className="h-3 w-3" />
 								</Button>
 							</DropdownMenuTrigger>
-							<DropdownMenuContent
-								align="center"
-								className="border-foreground/10 bg-editor-surface-alt"
-							>
+							<DropdownMenuContent align="center">
 								{ASPECT_RATIOS.map((ratio) => (
 									<DropdownMenuItem
 										key={ratio}
@@ -153,7 +155,7 @@ export function EditorPreviewPanel(props: Props) {
 							variant="ghost"
 							size="sm"
 							onClick={handleOpenCropEditor}
-							className="h-7 gap-1.5 px-2 text-xs text-muted-foreground transition-all hover:bg-foreground/10 hover:text-foreground"
+							className="h-7 gap-1.5 px-2 text-xs"
 						>
 							<Crop className="h-3.5 w-3.5" />
 							<span className="font-medium">{t("settings.crop.title")}</span>
@@ -163,21 +165,30 @@ export function EditorPreviewPanel(props: Props) {
 						</Button>
 					</div>
 					<div
-						className="flex min-h-0 w-full flex-1 items-stretch"
-						style={{ flex: "1 1 auto", margin: "6px 0 0" }}
+						className="flex min-h-0 w-full flex-1 items-stretch px-4 py-3"
+						style={{ flex: "1 1 auto", margin: 0 }}
 					>
-						<div className="flex min-w-0 flex-1 items-center justify-center px-1">
+						<div
+							className="editor-preview-stage flex min-h-0 min-w-0 flex-1 items-center justify-center"
+							style={{ containerType: "size" }}
+						>
 							<div
-								className="relative"
+								className="editor-preview-frame relative"
 								style={{
-									width: "auto",
-									height: "100%",
+									width: `min(100cqw, calc(100cqh * ${previewAspectRatioValue}))`,
+									height: `min(100cqh, calc(100cqw / ${previewAspectRatioValue}))`,
 									aspectRatio: previewAspectRatioValue,
 									maxWidth: "100%",
 									margin: "0 auto",
 									boxSizing: "border-box",
 								}}
 							>
+								{videoPath && !isPreviewReady && (
+									<Skeleton
+										aria-label="Loading preview"
+										className="pointer-events-none absolute inset-0 z-20 h-full w-full rounded-xl"
+									/>
+								)}
 								<EditorVideoPreview
 									videoPath={videoPath}
 									previewVersion={previewVersion}
@@ -191,7 +202,6 @@ export function EditorPreviewPanel(props: Props) {
 									timeline={timeline}
 									audio={audio}
 									effectiveZoomRegions={projection.effectiveZoomRegions}
-									effectiveSpeedRegions={projection.effectiveSpeedRegions}
 									effectiveCursorTelemetry={effectiveCursorTelemetry}
 									effectiveShowCursor={effectiveShowCursor}
 									setDuration={setDuration}
@@ -216,24 +226,17 @@ export function EditorPreviewPanel(props: Props) {
 				</div>
 			</div>
 
-			<div className="relative flex flex-shrink-0 items-center px-1 py-1">
-				<div className="z-10 flex min-w-0 flex-1 items-center gap-1.5">
+			<div className="editor-playback relative grid min-h-14 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 px-4">
+				<div className="editor-playback-tools z-10 flex min-w-0 items-center gap-2">
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-7 gap-1 rounded-full border border-foreground/[0.08] bg-foreground/[0.04] px-2.5 text-[11px] text-foreground/65 shadow-[inset_0_1px_0_hsl(var(--foreground)/0.06)] transition-all hover:bg-foreground/[0.08] hover:text-foreground"
-							>
+							<Button variant="ghost" size="sm" className="h-9 gap-2 px-3">
 								<Plus className="h-3.5 w-3.5" />
 								<span className="font-medium">{t("editor.toolbar.addLayer")}</span>
 								<CaretDown className="h-3 w-3" />
 							</Button>
 						</DropdownMenuTrigger>
-						<DropdownMenuContent
-							align="start"
-							className="border-foreground/10 bg-editor-surface-alt"
-						>
+						<DropdownMenuContent align="start">
 							<DropdownMenuItem
 								onClick={() => {
 									const nextTrack =
@@ -268,12 +271,11 @@ export function EditorPreviewPanel(props: Props) {
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
-					<div className="mx-1 h-4 w-px bg-foreground/10" />
 					<Button
 						onClick={() => timelineRef.current?.addZoom()}
 						variant="ghost"
 						size="icon"
-						className="h-7 w-7 rounded-full text-muted-foreground transition-all hover:bg-[#2563EB]/10 hover:text-[#2563EB]"
+						className="h-9 w-9"
 						title={t("timeline.zoom.addZoom")}
 					>
 						<MagnifyingGlassPlus className="h-4 w-4" />
@@ -282,7 +284,7 @@ export function EditorPreviewPanel(props: Props) {
 						onClick={() => timelineRef.current?.suggestZooms()}
 						variant="ghost"
 						size="icon"
-						className="h-7 w-7 rounded-full text-muted-foreground transition-all hover:bg-[#2563EB]/10 hover:text-[#2563EB]"
+						className="h-9 w-9"
 						title={t("timeline.zoom.suggestZooms")}
 					>
 						<MagicWand className="h-4 w-4" />
@@ -291,14 +293,14 @@ export function EditorPreviewPanel(props: Props) {
 						onClick={() => timelineRef.current?.splitClip()}
 						variant="ghost"
 						size="icon"
-						className="h-7 w-7 rounded-full text-muted-foreground transition-all hover:bg-foreground/10 hover:text-foreground"
+						className="h-9 w-9"
 						title={t("editor.toolbar.splitClip")}
 					>
 						<Scissors className="h-4 w-4" />
 					</Button>
 				</div>
 
-				<div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+				<div className="editor-playback-center z-10 flex items-center justify-center">
 					<div className="pointer-events-auto flex items-center gap-1.5">
 						<span className="mr-1 text-[10px] font-medium tabular-nums text-muted-foreground">
 							{formatTime(projection.timelinePlayheadTime)}
@@ -306,7 +308,7 @@ export function EditorPreviewPanel(props: Props) {
 						<Button
 							variant="ghost"
 							size="icon"
-							className="h-7 w-7 rounded-full text-muted-foreground transition-all hover:bg-foreground/10 hover:text-foreground"
+							className="h-9 w-9"
 							title={t("editor.playback.skipBack")}
 							onClick={playback.handlePreviewSkipBack}
 						>
@@ -315,7 +317,7 @@ export function EditorPreviewPanel(props: Props) {
 						<Button
 							variant="ghost"
 							size="icon"
-							className={`h-7 w-7 rounded-full border border-foreground/10 shadow-[0_8px_18px_rgba(0,0,0,0.18)] transition-all ${isPlaying ? "bg-foreground/10 text-foreground hover:bg-foreground/20" : "bg-neutral-800 text-white hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-white/90"}`}
+							className={`h-9 w-9  ${isPlaying ? "bg-foreground/10 text-foreground hover:bg-foreground/20" : "bg-neutral-800 text-white hover:bg-neutral-700 dark:bg-white dark:text-black dark:hover:bg-white/90"} `}
 							onClick={playback.togglePlayPause}
 							title={isPlaying ? "Pause" : "Play"}
 						>
@@ -328,7 +330,7 @@ export function EditorPreviewPanel(props: Props) {
 						<Button
 							variant="ghost"
 							size="icon"
-							className="h-7 w-7 rounded-full text-muted-foreground transition-all hover:bg-foreground/10 hover:text-foreground"
+							className="h-9 w-9"
 							title={t("editor.playback.skipForward")}
 							onClick={playback.handlePreviewSkipForward}
 						>
@@ -340,51 +342,45 @@ export function EditorPreviewPanel(props: Props) {
 					</div>
 				</div>
 
-				<div className="z-10 ml-auto flex items-center gap-2">
-					<div className="flex items-center gap-1.5">
-						<button
-							type="button"
-							className="text-muted-foreground transition-colors hover:text-foreground"
-							title={t("editor.playback.muteUnmute")}
-							onClick={() => setPreviewVolume(previewVolume <= 0.001 ? 1 : 0)}
+				<div className="editor-playback-volume z-10 ml-auto flex items-center">
+					<Popover>
+						<PopoverTrigger asChild>
+							<Button
+								variant="ghost"
+								size="icon"
+								aria-label={t("editor.playback.volume", "Preview volume")}
+								title={t("editor.playback.volume", "Preview volume")}
+							>
+								{previewVolume <= 0.001 ? (
+									<SpeakerX className="size-3.5" />
+								) : previewVolume < 0.5 ? (
+									<SpeakerLow className="size-3.5" />
+								) : (
+									<SpeakerHigh className="size-3.5" />
+								)}
+							</Button>
+						</PopoverTrigger>
+						<PopoverContent
+							side="top"
+							sideOffset={10}
+							aria-label="Preview volume"
+							className="flex w-14 flex-col items-center gap-3 p-3"
 						>
-							{previewVolume <= 0.001 ? (
-								<SpeakerX className="h-3.5 w-3.5" />
-							) : previewVolume < 0.5 ? (
-								<SpeakerLow className="h-3.5 w-3.5" />
-							) : (
-								<SpeakerHigh className="h-3.5 w-3.5" />
-							)}
-						</button>
-						<div className="relative flex h-7 w-24 select-none items-center overflow-hidden rounded-full border border-foreground/[0.06] bg-editor-bg/80 shadow-[inset_0_1px_0_hsl(var(--foreground)/0.06)]">
-							<div
-								className="absolute inset-y-[3px] left-[3px] right-auto rounded-[10px] bg-foreground/[0.08]"
-								style={{
-									width:
-										previewVolume > 0
-											? `max(calc(${previewVolume * 100}% - 6px), 1.2rem)`
-											: 0,
-								}}
-							/>
-							<div
-								className="pointer-events-none absolute bottom-[18%] top-[18%] z-10 w-0.5 rounded-full bg-foreground/95 shadow-[0_0_10px_rgba(37,99,235,0.28)]"
-								style={{ left: `calc(${previewVolume * 100}% - 8px)` }}
-							/>
-							<span className="pointer-events-none relative z-10 pl-2 text-[10px] font-medium text-muted-foreground">
+							<span className="text-[10px] tabular-nums text-muted-foreground">
 								{Math.round(previewVolume * 100)}%
 							</span>
-							<input
-								type="range"
+							<Slider
 								aria-label={t("editor.playback.volume", "Preview volume")}
-								min="0"
-								max="1"
-								step="0.01"
-								value={previewVolume}
-								onChange={(event) => setPreviewVolume(Number(event.target.value))}
-								className="absolute inset-0 h-full w-full cursor-ew-resize opacity-0"
+								orientation="vertical"
+								min={0}
+								max={1}
+								step={0.01}
+								value={[previewVolume]}
+								onValueChange={([value]) => setPreviewVolume(value)}
+								className="h-28"
 							/>
-						</div>
-					</div>
+						</PopoverContent>
+					</Popover>
 				</div>
 			</div>
 		</div>

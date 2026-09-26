@@ -190,7 +190,17 @@ export async function ensureSwiftHelperBinary(
 		const prebundledPath = getPrebundledNativeHelperPath(prebundledBinaryName);
 		try {
 			await fs.access(prebundledPath, fsConstants.X_OK);
-			return prebundledPath;
+			if (app.isPackaged) {
+				return prebundledPath;
+			}
+
+			const [sourceStat, prebundledStat] = await Promise.all([
+				fs.stat(sourcePath),
+				fs.stat(prebundledPath),
+			]);
+			if (prebundledStat.mtimeMs >= sourceStat.mtimeMs) {
+				return prebundledPath;
+			}
 		} catch {
 			if (app.isPackaged) {
 				throw new Error(

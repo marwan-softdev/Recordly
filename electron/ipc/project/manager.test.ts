@@ -42,9 +42,38 @@ describe("local media path policy", () => {
 	afterEach(async () => {
 		vi.resetModules();
 		vi.doUnmock("electron");
+		vi.doUnmock("../../mediaServer");
 		if (tempRoot) {
 			await fs.rm(tempRoot, { recursive: true, force: true });
 		}
+	});
+
+	it("reads library previews without switching the active project and rejects unknown projects", async () => {
+		vi.doMock("../../mediaServer", () => ({
+			getMediaServerBaseUrl: () => "http://127.0.0.1:1234",
+			buildMediaUrl: (base: string, file: string) =>
+				`${base}/media?path=${encodeURIComponent(file)}`,
+		}));
+		const manager = await import("./manager");
+		const state = await import("../state");
+		const source = path.join(tempRoot, "video.mp4");
+		await fs.writeFile(source, "video");
+		const projectsDir = await manager.getProjectsDir();
+		const projectPath = path.join(projectsDir, "preview.recordly");
+		await fs.writeFile(
+			projectPath,
+			JSON.stringify({ version: 1, videoPath: source, editor: {} }),
+		);
+		state.setCurrentProjectPath("active.recordly");
+		state.setCurrentVideoPath("active.mp4");
+		const result = await manager.readProjectPreview(projectPath);
+		expect(result.videoUrl).toContain(encodeURIComponent(source));
+		expect(result.webcamUrl).toBeNull();
+		expect(state.currentProjectPath).toBe("active.recordly");
+		expect(state.currentVideoPath).toBe("active.mp4");
+		await expect(
+			manager.readProjectPreview(path.join(tempRoot, "unknown.recordly")),
+		).rejects.toThrow("not in the library");
 	});
 
 	it("rejects existing media files outside allowed directories until they are approved", async () => {

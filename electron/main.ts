@@ -1,3 +1,4 @@
+import { clearRecordingTrashUndo } from "./ipc/recording/library";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,6 +17,7 @@ import {
 	Tray,
 } from "electron";
 import { RECORDINGS_DIR } from "./appPaths";
+import { createAuthCallbackController } from "./authCallback";
 import { showCursor } from "./cursorHider";
 import { getGpuSwitches } from "./gpuSwitches";
 import {
@@ -39,6 +41,7 @@ import {
 	getUpdaterLogPath,
 	getUpdateStatusSummary,
 	installDownloadedUpdateNow,
+	previewNativeUpdateDialog,
 	previewUpdateToast,
 	setExperimentalUpdatesEnabled,
 	setupAutoUpdates,
@@ -52,6 +55,7 @@ import {
 	getUpdateToastWindow,
 	hideUpdateToastWindow,
 	isHudOverlayMousePassthroughSupported,
+	beginHudCaptureProtection,
 	reassertHudOverlayMousePassthrough as reassertHudOverlayMouseState,
 	setHudOverlayRecordingActive,
 	showUpdateToastWindow,
@@ -62,7 +66,7 @@ const IS_SMOKE_EXPORT = process.env.RECORDLY_SMOKE_EXPORT === "1";
 
 function ignoreBrokenConsolePipe(stream: NodeJS.WritableStream | undefined) {
 	stream?.on("error", (error: NodeJS.ErrnoException) => {
-		if (error.code === "EPIPE") {
+		if (error.code === "EPIPE" || error.code === "EIO") {
 			return;
 		}
 		throw error;
@@ -186,6 +190,11 @@ const hasSingleInstanceLock = shouldEnforceSingleInstanceLock
 if (!hasSingleInstanceLock) {
 	app.quit();
 }
+
+const authCallbacks = createAuthCallbackController({
+	isDev: IS_DEV,
+	focusApp: () => focusOrCreateMainWindow(),
+});
 
 function closeEditorWindowBypassingUnsavedPrompt(window: BrowserWindow | null) {
 	if (!window || window.isDestroyed()) {
@@ -591,6 +600,10 @@ function syncDockIcon() {
 }
 
 function sendUpdateToastToWindows(channel: "update-toast-state", payload: unknown) {
+	if (process.platform !== "darwin") {
+		return false;
+	}
+
 	if (!payload) {
 		const existingWindow = getUpdateToastWindow();
 		if (existingWindow) {
@@ -682,7 +695,12 @@ ipcMain.handle("set-experimental-updates-enabled", async (_event, enabled: unkno
 	}
 });
 
-ipcMain.handle("preview-update-toast", () => {
+ipcMain.handle("preview-update-toast", async () => {
+	if (process.platform !== "darwin") {
+		await previewNativeUpdateDialog(getUpdateDialogWindow);
+		return { success: true };
+	}
+
 	return { success: previewUpdateToast(sendUpdateToastToWindows) };
 });
 
@@ -854,6 +872,10 @@ function createSourceSelectorWindowWrapper() {
 // explicitly with Cmd + Q.
 app.on("before-quit", () => {
 	isAppQuitting = true;
+	authCallbacks.close();
+	void clearRecordingTrashUndo().catch((error) =>
+		console.warn("Could not clear recording undo cache", error),
+	);
 	killWindowsCaptureProcess();
 	showCursor();
 	cleanupNativeVideoExportSessions();
@@ -872,12 +894,25 @@ app.on("activate", () => {
 	focusOrCreateMainWindow();
 });
 
-app.on("second-instance", () => {
+app.on("second-instance", (_event, commandLine) => {
+	const authCallback = authCallbacks.find(commandLine);
+	if (authCallback) authCallbacks.dispatch(authCallback);
 	focusOrCreateMainWindow();
 });
 
 // Register all IPC handlers when app is ready
 app.whenReady().then(async () => {
+	authCallbacks.startDevServer();
+	if (process.defaultApp && process.argv[1]) {
+		app.setAsDefaultProtocolClient(authCallbacks.protocol, process.execPath, [
+			path.resolve(process.argv[1]),
+		]);
+	} else {
+		app.setAsDefaultProtocolClient(authCallbacks.protocol);
+	}
+	const startupAuthCallback = authCallbacks.find(process.argv);
+	if (startupAuthCallback) authCallbacks.dispatch(startupAuthCallback);
+
 	if (process.platform === "win32") {
 		app.setAppUserModelId("dev.recordly.app");
 	}
@@ -924,17 +959,11 @@ app.whenReady().then(async () => {
 	// Recordly does not use WebHID, Web Serial, or WebUSB. Do not grant devices by default.
 	session.defaultSession.setDevicePermissionHandler(() => false);
 
-	if (process.platform === "darwin") {
-		const cameraStatus = systemPreferences.getMediaAccessStatus("camera");
-		if (cameraStatus !== "granted") {
-			await systemPreferences.askForMediaAccess("camera");
-		}
-
-		const micStatus = systemPreferences.getMediaAccessStatus("microphone");
-		if (micStatus !== "granted") {
-			await systemPreferences.askForMediaAccess("microphone");
-		}
-	} else if (process.platform === "win32") {
+	// macOS prompts for camera and microphone access at the point of use. Asking
+	// here blocks the first window behind two modal OS permission flows and makes
+	// a fresh install look hung. Windows has no equivalent request API, so retain
+	// its diagnostic warnings.
+	if (process.platform === "win32") {
 		const cameraStatus = systemPreferences.getMediaAccessStatus("camera");
 		const micStatus = systemPreferences.getMediaAccessStatus("microphone");
 		if (cameraStatus !== "granted") {
@@ -975,22 +1004,20 @@ app.whenReady().then(async () => {
 		updateTrayMenu();
 	}
 	setupApplicationMenu();
-	// Ensure recordings directory exists
-	await ensureRecordingsDir();
-
-	if (!VITE_DEV_SERVER_URL) {
-		try {
-			await ensurePackagedRendererServer(RENDERER_DIST);
-		} catch (error) {
-			console.warn("[renderer-server] Failed to start packaged renderer server:", error);
-		}
-	}
-
-	try {
-		await ensureMediaServer();
-	} catch (error) {
-		console.warn("[media-server] Failed to start media server:", error);
-	}
+	await Promise.all([
+		ensureRecordingsDir(),
+		!VITE_DEV_SERVER_URL
+			? ensurePackagedRendererServer(RENDERER_DIST).catch((error) => {
+					console.warn(
+						"[renderer-server] Failed to start packaged renderer server:",
+						error,
+					);
+				})
+			: Promise.resolve(),
+		ensureMediaServer().catch((error) => {
+			console.warn("[media-server] Failed to start media server:", error);
+		}),
+	]);
 
 	registerIpcHandlers(
 		createEditorWindowWrapper,
@@ -1034,7 +1061,12 @@ app.whenReady().then(async () => {
 	setupAutoUpdates(getUpdateDialogWindow, sendUpdateToastToWindows);
 	if (IS_DEV && process.env.RECORDLY_DEV_PREVIEW_UPDATE === "1") {
 		setTimeout(() => {
-			previewUpdateToast(sendUpdateToastToWindows);
+			if (process.platform === "darwin") {
+				previewUpdateToast(sendUpdateToastToWindows);
+				return;
+			}
+
+			void previewNativeUpdateDialog(getUpdateDialogWindow);
 		}, 750);
 	}
 
@@ -1074,6 +1106,10 @@ app.whenReady().then(async () => {
 				callback({});
 				return;
 			}
+
+			// Browser and Linux portal capture starts as soon as this callback
+			// resolves, before recording-state-changed is emitted.
+			beginHudCaptureProtection();
 
 			const sourceId = getSelectedSourceId();
 			// On Linux/Wayland, calling desktopCapturer.getSources() itself

@@ -1,12 +1,14 @@
 /* biome-ignore-all lint/correctness/useExhaustiveDependencies: grouped editor domain objects contain the thumbnail renderer dependencies. */
 import { type RefObject, useCallback, useEffect, useRef } from "react";
-import { FrameRenderer } from "@/lib/exporter";
+import { PROJECT_THUMBNAIL_WIDTH, PROJECT_THUMBNAIL_HEIGHT } from "@/lib/projectThumbnail";
+import { FrameRenderer } from "@/lib/exporter/frameRenderer";
 import { toFileUrl } from "../projectPersistence";
 import type { useAppearanceState } from "../state/useAppearanceState";
 import type { useProjectState } from "../state/useProjectState";
 import type { useTimelineState } from "../state/useTimelineState";
-import { getClipSourceEndMs, type SpeedRegion } from "../types";
+import { getClipSourceEndMs, getClipSourceStartMs, type SpeedRegion } from "../types";
 import type { VideoPlaybackRef } from "../VideoPlayback";
+import { findPreviewClipAtTimelineTime } from "../videoPlayback/clipPlayback";
 
 type Input = {
 	project: ReturnType<typeof useProjectState>;
@@ -67,9 +69,6 @@ export function useProjectLibraryController({
 		zoomInOverlapMs,
 		zoomMotionBlur,
 		zoomMotionBlurTuning,
-		zoomTemporalMotionBlur,
-		zoomMotionBlurSampleCount,
-		zoomMotionBlurShutterFraction,
 		zoomOutDurationMs,
 		zoomOutEasing,
 		zoomClassicMode,
@@ -114,8 +113,8 @@ export function useProjectLibraryController({
 		}
 
 		const canvas = document.createElement("canvas");
-		const targetWidth = 320;
-		const targetHeight = 180;
+		const targetWidth = PROJECT_THUMBNAIL_WIDTH;
+		const targetHeight = PROJECT_THUMBNAIL_HEIGHT;
 		canvas.width = targetWidth;
 		canvas.height = targetHeight;
 
@@ -140,8 +139,12 @@ export function useProjectLibraryController({
 			let frameRenderer: FrameRenderer | null = null;
 
 			try {
-				videoFrame = new VideoFrame(previewVideo, { timestamp: frameTimestampUs });
+				const sourceTimestampUs = previewVideo.currentTime * 1_000_000;
+				if (findPreviewClipAtTimelineTime(frameTimestampUs / 1000, clipRegions)) {
+					videoFrame = new VideoFrame(previewVideo, { timestamp: sourceTimestampUs });
+				}
 				frameRenderer = new FrameRenderer({
+					timelineEffects: true,
 					width: targetWidth,
 					height: targetHeight,
 					wallpaper,
@@ -151,9 +154,6 @@ export function useProjectLibraryController({
 					backgroundBlur,
 					zoomMotionBlur,
 					zoomMotionBlurTuning,
-					zoomTemporalMotionBlur,
-					zoomMotionBlurSampleCount,
-					zoomMotionBlurShutterFraction,
 					connectZooms,
 					zoomInDurationMs,
 					zoomInOverlapMs,
@@ -180,7 +180,7 @@ export function useProjectLibraryController({
 							.filter((clip) => clip.speed !== 1)
 							.map((clip) => ({
 								id: `clip-speed-${clip.id}`,
-								startMs: clip.startMs,
+								startMs: getClipSourceStartMs(clip),
 								endMs: getClipSourceEndMs(clip),
 								speed: clip.speed as SpeedRegion["speed"],
 							}));
@@ -222,7 +222,13 @@ export function useProjectLibraryController({
 					cursorSway,
 				});
 				await frameRenderer.initialize();
-				await frameRenderer.renderFrame(videoFrame, frameTimestampUs);
+				await frameRenderer.renderFrame(
+					videoFrame,
+					sourceTimestampUs,
+					sourceTimestampUs,
+					undefined,
+					frameTimestampUs,
+				);
 				return frameRenderer.getCanvas().toDataURL("image/png");
 			} catch (thumbnailRenderError) {
 				console.warn(
@@ -316,9 +322,6 @@ export function useProjectLibraryController({
 		zoomInOverlapMs,
 		zoomMotionBlur,
 		zoomMotionBlurTuning,
-		zoomTemporalMotionBlur,
-		zoomMotionBlurSampleCount,
-		zoomMotionBlurShutterFraction,
 		zoomOutDurationMs,
 		zoomOutEasing,
 		zoomRegions,

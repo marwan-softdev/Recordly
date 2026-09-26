@@ -1,10 +1,12 @@
-import { type RefObject, useCallback, useEffect, useRef } from "react";
-import { toast } from "sonner";
+import { moveProjectFolderReferences } from "../dashboard/useProjectFolders";
+import { moveProjectShareLink } from "../cloud/projectShareLinks";
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { toast } from "@/components/ui/toast";
 import { createProjectData, type EditorProjectData } from "../projectPersistence";
 import type { useProjectState } from "../state/useProjectState";
 import { cloneStructured, getErrorMessage } from "../videoEditorUtils";
 
-const PROJECT_AUTOSAVE_DELAY_MS = 1_000;
+const PROJECT_AUTOSAVE_DELAY_MS = 750;
 
 type SaveProjectOptions = {
 	silent?: boolean;
@@ -57,6 +59,15 @@ export function useProjectSaveActions({
 		setIsSavingProjectName,
 		setProjectBrowserOpen,
 	} = project;
+	const savingNameRef = useRef(false);
+	const activePathRef = useRef(currentProjectPath);
+	const activeSourceRef = useRef(currentSourcePath);
+	useLayoutEffect(() => {
+		activePathRef.current = currentProjectPath;
+	}, [currentProjectPath]);
+	useLayoutEffect(() => {
+		activeSourceRef.current = currentSourcePath;
+	}, [currentSourcePath]);
 	const autosaveTimeoutRef = useRef<number | null>(null);
 	const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
 	const clearPendingAutosave = useCallback(() => {
@@ -74,7 +85,9 @@ export function useProjectSaveActions({
 	const saveProject = useCallback(
 		async (forceSaveAs: boolean, options?: SaveProjectOptions) => {
 			clearPendingAutosave();
+			if (forceSaveAs) return openProjectSaveDialog(projectDisplayName || "Untitled Project");
 			return queueSave(async () => {
+				if (activeSourceRef.current !== currentSourcePath) return false;
 				if (!currentSourcePath) {
 					if (!options?.silent) toast.error("No video loaded");
 					return false;
@@ -97,40 +110,35 @@ export function useProjectSaveActions({
 							.split(/[\\/]/)
 							.pop()
 							?.replace(/\.[^.]+$/, "") || `project-${Date.now()}`;
-					let targetPath = forceSaveAs ? undefined : (currentProjectPath ?? undefined);
-
-					if (!forceSaveAs && !targetPath) {
-						const activeProject = await window.electronAPI.loadCurrentProjectFile();
-						if (activeProject.success && activeProject.path) {
-							targetPath = activeProject.path;
-							setCurrentProjectPath(activeProject.path);
-						}
-					}
-					if (forceSaveAs || !targetPath) {
-						if (options?.silent) return false;
-						return await openProjectSaveDialog(projectDisplayName || fileNameBase);
-					}
+					const targetPath = forceSaveAs
+						? undefined
+						: (activePathRef.current ?? undefined);
 
 					const thumbnail = captureThumbnail
-						? await captureProjectThumbnail()
+						? ((await captureProjectThumbnail()) ?? undefined)
 						: undefined;
-					const result = await window.electronAPI.saveProjectFile(
-						projectData,
-						fileNameBase,
-						targetPath,
-						thumbnail,
-					);
+					const result = !targetPath
+						? await window.electronAPI.createProjectFile(projectData, thumbnail)
+						: await window.electronAPI.saveProjectFile(
+								projectData,
+								fileNameBase,
+								targetPath,
+								thumbnail,
+							);
 					if (result.canceled) {
 						if (!options?.silent) toast.info("Project save canceled");
 						return false;
 					}
 					if (!result.success) {
-						if (!options?.silent)
-							toast.error(result.message || "Failed to save project");
+						toast.error(result.message || "Failed to save project");
 						return false;
 					}
 
-					if (result.path) setCurrentProjectPath(result.path);
+					if (activeSourceRef.current !== currentSourcePath) return true;
+					if (result.path) {
+						activePathRef.current = result.path;
+						setCurrentProjectPath(result.path);
+					}
 					setLastSavedSnapshot(
 						cloneStructured(
 							createProjectData(
@@ -141,8 +149,11 @@ export function useProjectSaveActions({
 						),
 					);
 					if (refreshLibrary) await refreshProjectLibrary();
-					if (!options?.silent) toast.success(`Project saved to ${result.path}`);
+
 					return true;
+				} catch (error) {
+					toast.error(`Could not save project: ${getErrorMessage(error)}`);
+					return false;
 				} finally {
 					if (remount) remountPreview();
 				}
@@ -154,7 +165,6 @@ export function useProjectSaveActions({
 			currentSourcePath,
 			currentProjectSnapshot,
 			currentPersistedEditorState,
-			currentProjectPath,
 			lastSavedSnapshot,
 			setCurrentProjectPath,
 			setLastSavedSnapshot,
@@ -174,7 +184,12 @@ export function useProjectSaveActions({
 		[saveProject],
 	);
 	useEffect(() => {
-		if (!currentProjectPath || !hasUnsavedChanges) {
+		if (
+			project.projectBrowserOpen ||
+			project.loading ||
+			!currentSourcePath ||
+			!hasUnsavedChanges
+		) {
 			clearPendingAutosave();
 			return;
 		}
@@ -188,7 +203,14 @@ export function useProjectSaveActions({
 			});
 		}, PROJECT_AUTOSAVE_DELAY_MS);
 		return clearPendingAutosave;
-	}, [clearPendingAutosave, currentProjectPath, hasUnsavedChanges, saveProject]);
+	}, [
+		clearPendingAutosave,
+		hasUnsavedChanges,
+		saveProject,
+		project.projectBrowserOpen,
+		project.loading,
+		currentSourcePath,
+	]);
 	useEffect(() => clearPendingAutosave, [clearPendingAutosave]);
 
 	const saveProjectWithName = useCallback(
@@ -202,47 +224,73 @@ export function useProjectSaveActions({
 				toast.error("No video loaded");
 				return false;
 			}
-			try {
-				const projectData =
-					currentProjectSnapshot?.videoPath === currentSourcePath
-						? currentProjectSnapshot
-						: createProjectData(
-								currentSourcePath,
-								currentPersistedEditorState,
-								lastSavedSnapshot?.projectId ?? null,
+			clearPendingAutosave();
+			return queueSave(async () => {
+				if (activeSourceRef.current !== currentSourcePath) return false;
+				try {
+					const projectData =
+						currentProjectSnapshot?.videoPath === currentSourcePath
+							? currentProjectSnapshot
+							: createProjectData(
+									currentSourcePath,
+									currentPersistedEditorState,
+									lastSavedSnapshot?.projectId ?? null,
+								);
+					const previousPath = activePathRef.current;
+					const result = await window.electronAPI.saveProjectFileNamed(
+						projectData,
+						trimmedName,
+						await captureProjectThumbnail(),
+						mode,
+					);
+					if (result.canceled) {
+						toast.info("Project save canceled");
+						return false;
+					}
+					if (!result.success) {
+						toast.error(result.message || "Failed to save project");
+						return false;
+					}
+					if (activeSourceRef.current !== currentSourcePath) return true;
+					if (
+						mode === "rename" &&
+						previousPath &&
+						result.path &&
+						previousPath !== result.path
+					) {
+						try {
+							moveProjectFolderReferences(previousPath, result.path);
+							moveProjectShareLink(previousPath, result.path);
+						} catch {
+							toast.error(
+								"Project renamed, but library preferences could not be updated",
 							);
-				const result = await window.electronAPI.saveProjectFileNamed(
-					projectData,
-					trimmedName,
-					await captureProjectThumbnail(),
-					mode,
-				);
-				if (result.canceled) {
-					toast.info("Project save canceled");
-					return false;
-				}
-				if (!result.success) {
-					toast.error(result.message || "Failed to save project");
-					return false;
-				}
-				if (result.path) setCurrentProjectPath(result.path);
-				setLastSavedSnapshot(
-					cloneStructured(
-						createProjectData(
-							projectData.videoPath,
-							projectData.editor,
-							result.projectId ?? projectData.projectId ?? null,
+						}
+					}
+					if (result.path) {
+						activePathRef.current = result.path;
+						setCurrentProjectPath(result.path);
+					}
+					setLastSavedSnapshot(
+						cloneStructured(
+							createProjectData(
+								projectData.videoPath,
+								projectData.editor,
+								result.projectId ?? projectData.projectId ?? null,
+							),
 						),
-					),
-				);
-				await refreshProjectLibrary();
-				toast.success(result.path ? `Project saved to ${result.path}` : "Project saved");
-				return true;
-			} finally {
-				remountPreview();
-			}
+					);
+					await refreshProjectLibrary();
+
+					return true;
+				} finally {
+					remountPreview();
+				}
+			});
 		},
 		[
+			clearPendingAutosave,
+			queueSave,
 			currentSourcePath,
 			currentProjectSnapshot,
 			currentPersistedEditorState,
@@ -296,7 +344,9 @@ export function useProjectSaveActions({
 		async (event?: React.FormEvent<HTMLFormElement>) => {
 			event?.preventDefault();
 			const name = projectNameDraft.trim();
-			if (!name) return closeProjectNameEditor();
+			if (savingNameRef.current) return;
+			if (!name || name === projectDisplayName) return closeProjectNameEditor();
+			savingNameRef.current = true;
 			setIsSavingProjectName(true);
 			let saved = false;
 			try {
@@ -305,6 +355,7 @@ export function useProjectSaveActions({
 				toast.error(getErrorMessage(error));
 			} finally {
 				setIsSavingProjectName(false);
+				savingNameRef.current = false;
 			}
 			if (saved) setIsEditingProjectName(false);
 			else {
@@ -314,6 +365,7 @@ export function useProjectSaveActions({
 		},
 		[
 			projectNameDraft,
+			projectDisplayName,
 			setIsSavingProjectName,
 			setIsEditingProjectName,
 			projectNameInputRef,

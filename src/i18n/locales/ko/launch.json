@@ -1,5 +1,6 @@
 {
 	"recording": {
+		"home": "홈",
 		"disableSystemAudio": "시스템 오디오 끄기",
 		"enableSystemAudio": "시스템 오디오 켜기",
 		"disableMicrophone": "마이크 끄기",

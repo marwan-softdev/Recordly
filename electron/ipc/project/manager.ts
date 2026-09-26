@@ -1,3 +1,6 @@
+import { buildMediaUrl, getMediaServerBaseUrl } from "../../mediaServer";
+import type { ProjectPreviewData } from "../../../src/types/projectPreview";
+import { hasFreshProjectThumbnail } from "./thumbnailFreshness";
 import { existsSync, constants as fsConstants, realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -335,10 +338,7 @@ export async function buildProjectLibraryEntry(
 		}
 
 		const thumbnailPath = getProjectThumbnailPath(normalizedPath);
-		const thumbnailExists = await fs
-			.access(thumbnailPath, fsConstants.R_OK)
-			.then(() => true)
-			.catch(() => false);
+		const thumbnailExists = await hasFreshProjectThumbnail(thumbnailPath, stats.mtimeMs);
 
 		return {
 			path: normalizedPath,
@@ -352,6 +352,7 @@ export async function buildProjectLibraryEntry(
 					"",
 				),
 			updatedAt: stats.mtimeMs,
+			createdAt: stats.birthtimeMs || stats.ctimeMs,
 			thumbnailPath: thumbnailExists ? thumbnailPath : null,
 			isCurrent: Boolean(
 				currentProjectPath && normalizePath(currentProjectPath) === normalizedPath,
@@ -424,6 +425,28 @@ function isLoadableProjectData(projectData: unknown) {
 		typeof candidate.editor === "object" &&
 		!Array.isArray(candidate.editor)
 	);
+}
+
+/** Read a listed project's preview without changing the active project or recording session. */
+export async function readProjectPreview(projectPath: string): Promise<ProjectPreviewData> {
+	if (typeof projectPath !== "string") throw new Error("Invalid project path");
+	const normalizedPath = normalizePath(projectPath);
+	const { entries } = await listProjectLibraryEntries();
+	if (!entries.some((entry) => entry.path === normalizedPath))
+		throw new Error("Project is not in the library");
+	const project = parseJsonWithByteOrderMark(await fs.readFile(normalizedPath, "utf-8"));
+	if (!isLoadableProjectData(project)) throw new Error("Invalid project file format");
+	const media = await resolveProjectMediaSources(project);
+	if (!media.success) throw new Error(media.message);
+	const baseUrl = getMediaServerBaseUrl();
+	if (!baseUrl) throw new Error("Media server is not ready");
+	await rememberApprovedLocalReadPath(media.videoPath);
+	if (media.webcamPath) await rememberApprovedLocalReadPath(media.webcamPath);
+	return {
+		project: project as ProjectPreviewData["project"],
+		videoUrl: buildMediaUrl(baseUrl, media.videoPath),
+		webcamUrl: media.webcamPath ? buildMediaUrl(baseUrl, media.webcamPath) : null,
+	};
 }
 
 export async function loadProjectFromPath(projectPath: string) {

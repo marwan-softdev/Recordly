@@ -32,9 +32,7 @@ export function useLaunchHudInteractionState({
 		const handleMouseOver = (e: globalThis.MouseEvent) => {
 			const target = e.target as HTMLElement | null;
 			if (!target) return;
-			const isInteractive = !!target.closest(
-				".pointer-events-auto, [data-hud-interactive], [data-radix-popper-content-wrapper]",
-			);
+			const isInteractive = !!target.closest(".pointer-events-auto, [data-hud-interactive]");
 
 			if (isInteractive) {
 				isMouseOverHudRef.current = true;

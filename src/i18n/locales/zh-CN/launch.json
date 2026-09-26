@@ -1,5 +1,6 @@
 {
 	"recording": {
+		"home": "主页",
 		"disableSystemAudio": "禁用系统音频",
 		"enableSystemAudio": "启用系统音频",
 		"disableMicrophone": "禁用麦克风",
