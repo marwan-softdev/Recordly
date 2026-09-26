@@ -1,11 +1,12 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import { USER_DATA_PATH } from "../../appPaths";
-import { normalizePath } from "../utils";
 import { getAssetRootPath } from "../project/manager";
+import { normalizePath } from "../utils";
 
 export function registerAssetHandlers() {
 	async function resolveReadableLocalFilePath(filePath: string) {
@@ -27,11 +28,28 @@ export function registerAssetHandlers() {
 
 	ipcMain.handle("generate-wallpaper-thumbnail", async (_, filePath: string) => {
 		try {
-			const resolved = await resolveReadableLocalFilePath(filePath);
+			const bundled = filePath.startsWith("/wallpapers/");
+			const wallpaperRoot = path.resolve(getAssetRootPath(), "wallpapers");
+			const candidate = bundled
+				? path.resolve(
+						wallpaperRoot,
+						decodeURIComponent(filePath.slice("/wallpapers/".length)),
+					)
+				: filePath;
+			if (
+				bundled &&
+				(path.relative(wallpaperRoot, candidate).startsWith("..") ||
+					path.isAbsolute(path.relative(wallpaperRoot, candidate)))
+			) {
+				throw new Error("Wallpaper path is outside the bundled wallpapers");
+			}
+			const resolved = await resolveReadableLocalFilePath(candidate);
 
 			// Deterministic cache key from file path + mtime
 			const stat = await fs.stat(resolved);
-			const cacheKey = Buffer.from(`${resolved}:${stat.mtimeMs}`).toString("base64url");
+			const cacheKey = createHash("sha256")
+				.update(`${resolved}:${stat.mtimeMs}`)
+				.digest("hex");
 			const thumbPath = path.join(thumbCacheDir, `${cacheKey}.jpg`);
 
 			// Return cached thumbnail if it exists (no queue needed)
@@ -73,6 +91,10 @@ export function registerAssetHandlers() {
 
 	// Return base path for assets so renderer can resolve file:// paths in production
 	ipcMain.handle("get-asset-base-path", () => {
+		if (!app.isPackaged) {
+			return null;
+		}
+
 		try {
 			const assetPath = getAssetRootPath();
 			return pathToFileURL(`${assetPath}${path.sep}`).toString();

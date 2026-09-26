@@ -2,11 +2,16 @@ import Foundation
 import ScreenCaptureKit
 import AVFoundation
 import CoreGraphics
+import CoreImage
 
 struct CaptureConfig: Codable {
 	let fps: Int?
 	let displayId: CGDirectDisplayID?
 	let windowId: UInt32?
+	let windowX: Double?
+	let windowY: Double?
+	let windowWidth: Double?
+	let windowHeight: Double?
 	let outputPath: String?
 	let capturesSystemAudio: Bool?
 	let capturesMicrophone: Bool?
@@ -14,6 +19,7 @@ struct CaptureConfig: Codable {
 	let microphoneDeviceId: String?
 	let microphoneLabel: String?
 	let microphoneOutputPath: String?
+	let excludedProcessIds: [Int32]?
 }
 
 let targetCaptureFPS = 60
@@ -32,6 +38,12 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	private let queue = DispatchQueue(label: "recordly.screencapturekit.video")
 	private var assetWriter: AVAssetWriter?
 	private var videoInput: AVAssetWriterInput?
+	private var videoPixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
+	private var windowCropRect: CGRect?
+	private var windowCropDisplayId: CGDirectDisplayID?
+	private var excludedProcessIds = Set<Int32>()
+	private var lastCroppedPixelBuffer: CVPixelBuffer?
+	private let imageContext = CIContext(options: [.cacheIntermediates: false])
 	private var systemAudioWriter: AVAssetWriter?
 	private var systemAudioInput: AVAssetWriterInput?
 	private var microphoneOnlyWriter: AVAssetWriter?
@@ -113,6 +125,10 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		let filter: SCContentFilter
 		let outputWidth: Int
 		let outputHeight: Int
+		excludedProcessIds = Set(config.excludedProcessIds ?? [])
+		let excludedApplications = availableContent.applications.filter {
+			excludedProcessIds.contains($0.processID)
+		}
 
 		if let windowId = config.windowId {
 			trackedWindowId = windowId
@@ -120,27 +136,54 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				throw NSError(domain: "RecordlyCapture", code: 3, userInfo: [NSLocalizedDescriptionKey: "Window not found"])
 			}
 
-			filter = SCContentFilter(desktopIndependentWindow: window)
-
-			let candidateDisplay = availableContent.displays.first(where: {
-				$0.frame.intersects(window.frame) || $0.frame.contains(CGPoint(x: window.frame.midX, y: window.frame.midY))
-			})
-			let scaleFactor = ScreenCaptureRecorder.scaleFactor(for: candidateDisplay?.displayID ?? CGMainDisplayID())
-			outputWidth = max(2, Int(window.frame.width) * scaleFactor)
-			outputHeight = max(2, Int(window.frame.height) * scaleFactor)
-			if #available(macOS 14.0, *) {
-				streamConfig.ignoreShadowsSingleWindow = true
+			// Accessibility reports the visible frame at the native border.
+			let visibleFrame: CGRect
+			if let x = config.windowX,
+			   let y = config.windowY,
+			   let width = config.windowWidth,
+			   let height = config.windowHeight,
+			   width > 0,
+			   height > 0 {
+				visibleFrame = CGRect(x: x, y: y, width: width, height: height)
+			} else {
+				visibleFrame = window.frame
 			}
-			streamConfig.width = outputWidth
-			streamConfig.height = outputHeight
+			guard let display = Self.captureDisplay(for: visibleFrame, from: availableContent.displays) else {
+				throw NSError(domain: "RecordlyCapture", code: 4, userInfo: [NSLocalizedDescriptionKey: "Window display not found"])
+			}
+			let scaleFactor = ScreenCaptureRecorder.scaleFactor(for: display.displayID)
+			let captureRect = visibleFrame.intersection(display.frame)
+			filter = SCContentFilter(
+				display: display,
+				excludingApplications: excludedApplications,
+				exceptingWindows: []
+			)
+			windowCropRect = CGRect(
+				x: (captureRect.minX - display.frame.minX) / display.frame.width,
+				y: (captureRect.minY - display.frame.minY) / display.frame.height,
+				width: captureRect.width / display.frame.width,
+				height: captureRect.height / display.frame.height
+			)
+			windowCropDisplayId = display.displayID
+			outputWidth = max(2, Int(captureRect.width) * scaleFactor) & ~1
+			outputHeight = max(2, Int(captureRect.height) * scaleFactor) & ~1
+			streamConfig.width = max(2, Int(display.frame.width) * scaleFactor)
+			streamConfig.height = max(2, Int(display.frame.height) * scaleFactor)
+			streamConfig.pixelFormat = kCVPixelFormatType_32BGRA
 		} else {
 			trackedWindowId = nil
+			windowCropRect = nil
+			windowCropDisplayId = nil
 			let displayId = config.displayId ?? CGMainDisplayID()
 			guard let display = availableContent.displays.first(where: { $0.displayID == displayId }) else {
 				throw NSError(domain: "RecordlyCapture", code: 4, userInfo: [NSLocalizedDescriptionKey: "Display not found"])
 			}
 
-			filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+			filter = SCContentFilter(
+				display: display,
+				excludingApplications: excludedApplications,
+				exceptingWindows: []
+			)
 			let displayBounds = CGDisplayBounds(display.displayID)
 			let scaleFactor = ScreenCaptureRecorder.scaleFactor(for: display.displayID)
 			outputWidth = max(2, Int(displayBounds.width) * scaleFactor)
@@ -172,7 +215,9 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
 		let sourceVideoFormat = try CMVideoFormatDescription(
 			videoCodecType: CMFormatDescription.MediaSubType(
-				rawValue: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+				rawValue: windowCropRect == nil
+					? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+					: kCVPixelFormatType_32BGRA
 			),
 			width: outputWidth,
 			height: outputHeight
@@ -204,6 +249,16 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
 		assetWriter.add(videoInput)
 		self.videoInput = videoInput
+		videoPixelBufferAdaptor = windowCropRect.map { _ in
+			AVAssetWriterInputPixelBufferAdaptor(
+				assetWriterInput: videoInput,
+				sourcePixelBufferAttributes: [
+					kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+					kCVPixelBufferWidthKey as String: outputWidth,
+					kCVPixelBufferHeightKey as String: outputHeight,
+				]
+			)
+		}
 
 		// Add inline audio track directly to the video so the .mp4 always contains audio.
 		// This eliminates the dependency on the post-recording ffmpeg mux step.
@@ -339,13 +394,8 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
 	func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
 		guard sessionStarted, sampleBuffer.isValid, isRecording else { return }
-		guard let presentationTime = adjustedPresentationTime(for: sampleBuffer, outputType: outputType) else { return }
 
 		if outputType == .screen {
-			if frameCount > 0 && CMTimeCompare(presentationTime, lastVideoPresentationTime) <= 0 {
-				return
-			}
-
 			guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
 					  let attachment = attachments.first,
 					  let statusRawValue = attachment[SCStreamFrameInfo.status] as? Int,
@@ -358,14 +408,25 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				  assetWriter?.status == .writing,
 				  videoInput.isReadyForMoreMediaData else { return }
 
-			if firstSampleTime == .zero {
-				firstSampleTime = sampleBuffer.presentationTimeStamp
+			// Only a complete frame that the writer can accept may establish time zero.
+			guard let presentationTime = adjustedPresentationTime(for: sampleBuffer, outputType: outputType) else { return }
+			if frameCount > 0 && CMTimeCompare(presentationTime, lastVideoPresentationTime) <= 0 {
+				return
 			}
 
 			lastSampleBuffer = sampleBuffer
-			let timing = CMSampleTimingInfo(duration: sampleBuffer.duration, presentationTimeStamp: presentationTime, decodeTimeStamp: sampleBuffer.decodeTimeStamp)
-			if let retimedSampleBuffer = try? CMSampleBuffer(copying: sampleBuffer, withNewTiming: [timing]) {
-				if videoInput.append(retimedSampleBuffer) {
+			let appended: Bool
+			if videoPixelBufferAdaptor != nil {
+				appended = appendCroppedVideoFrame(sampleBuffer, at: presentationTime)
+			} else {
+				let timing = CMSampleTimingInfo(duration: sampleBuffer.duration, presentationTimeStamp: presentationTime, decodeTimeStamp: sampleBuffer.decodeTimeStamp)
+				if let retimed = try? CMSampleBuffer(copying: sampleBuffer, withNewTiming: [timing]) {
+					appended = videoInput.append(retimed)
+				} else {
+					appended = false
+				}
+			}
+			if appended {
 					lastVideoPresentationTime = presentationTime
 					lastVideoDuration = sampleBuffer.duration
 					frameCount += 1
@@ -375,10 +436,15 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 						print("Recording started")
 						fflush(stdout)
 					}
-				}
+			} else if frameCount == 0 {
+				// A failed crop/append must not leave an empty interval before frame one.
+				firstSampleTime = .zero
 			}
 			return
 		}
+
+		guard frameCount > 0,
+			  let presentationTime = adjustedPresentationTime(for: sampleBuffer, outputType: outputType) else { return }
 
 		if outputType == .audio {
 			guard let systemAudioInput else { return }
@@ -402,6 +468,48 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		}
 
 		return
+	}
+
+	private func appendCroppedVideoFrame(_ sampleBuffer: CMSampleBuffer, at presentationTime: CMTime) -> Bool {
+		guard let crop = windowCropRect,
+			  let adaptor = videoPixelBufferAdaptor,
+			  let pool = adaptor.pixelBufferPool,
+			  let source = CMSampleBufferGetImageBuffer(sampleBuffer) else { return false }
+
+		var destination: CVPixelBuffer?
+		guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &destination) == kCVReturnSuccess,
+			  let destination else { return false }
+
+		let sourceWidth = CGFloat(CVPixelBufferGetWidth(source))
+		let sourceHeight = CGFloat(CVPixelBufferGetHeight(source))
+		let sourceRect = CGRect(
+			x: crop.minX * sourceWidth,
+			y: (1 - crop.maxY) * sourceHeight,
+			width: crop.width * sourceWidth,
+			height: crop.height * sourceHeight
+		)
+		let destinationSize = CGSize(
+			width: CVPixelBufferGetWidth(destination),
+			height: CVPixelBufferGetHeight(destination)
+		)
+		let image = CIImage(cvPixelBuffer: source)
+			.cropped(to: sourceRect)
+			.transformed(by: CGAffineTransform(translationX: -sourceRect.minX, y: -sourceRect.minY))
+			.transformed(by: CGAffineTransform(
+				scaleX: destinationSize.width / sourceRect.width,
+				y: destinationSize.height / sourceRect.height
+			))
+		let bounds = CGRect(origin: .zero, size: destinationSize)
+		imageContext.render(
+			image,
+			to: destination,
+			bounds: bounds,
+			colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+		)
+
+		let appended = adaptor.append(destination, withPresentationTime: presentationTime)
+		if appended { lastCroppedPixelBuffer = destination }
+		return appended
 	}
 
 	func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -488,9 +596,13 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		   let videoInput = videoInput,
 		   await waitUntilReady(videoInput, of: assetWriter) {
 			let additionalTime = lastVideoPresentationTime + frameDuration(for: originalBuffer)
-			let timing = CMSampleTimingInfo(duration: originalBuffer.duration, presentationTimeStamp: additionalTime, decodeTimeStamp: originalBuffer.decodeTimeStamp)
-			if let additionalSampleBuffer = try? CMSampleBuffer(copying: originalBuffer, withNewTiming: [timing]) {
+			if let adaptor = videoPixelBufferAdaptor, let pixelBuffer = lastCroppedPixelBuffer {
+				adaptor.append(pixelBuffer, withPresentationTime: additionalTime)
+			} else {
+				let timing = CMSampleTimingInfo(duration: originalBuffer.duration, presentationTimeStamp: additionalTime, decodeTimeStamp: originalBuffer.decodeTimeStamp)
+				if let additionalSampleBuffer = try? CMSampleBuffer(copying: originalBuffer, withNewTiming: [timing]) {
 				videoInput.append(additionalSampleBuffer)
+				}
 			}
 		}
 
@@ -527,6 +639,11 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		let path = outputURL?.path ?? ""
 		assetWriter = nil
 		videoInput = nil
+		videoPixelBufferAdaptor = nil
+		windowCropRect = nil
+		windowCropDisplayId = nil
+		excludedProcessIds.removeAll()
+		lastCroppedPixelBuffer = nil
 		systemAudioWriter = nil
 		systemAudioInput = nil
 		microphoneOnlyWriter = nil
@@ -758,8 +875,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 					continue
 				}
 
-				let windowStillAvailable = availableContent.windows.contains(where: { $0.windowID == trackedWindowId })
-				if !windowStillAvailable {
+				guard let window = availableContent.windows.first(where: { $0.windowID == trackedWindowId }) else {
 					print("WINDOW_UNAVAILABLE")
 					fflush(stdout)
 					let finalization = await self.finalizeCapture(interactive: false)
@@ -776,9 +892,57 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 						fflush(stderr)
 						exit(1)
 					}
+					return
+				}
+
+				guard let display = Self.captureDisplay(for: window.frame, from: availableContent.displays) else {
+					continue
+				}
+				let captureRect = window.frame.intersection(display.frame)
+				guard captureRect.width > 0, captureRect.height > 0 else { continue }
+				let cropRect = CGRect(
+					x: (captureRect.minX - display.frame.minX) / display.frame.width,
+					y: (captureRect.minY - display.frame.minY) / display.frame.height,
+					width: captureRect.width / display.frame.width,
+					height: captureRect.height / display.frame.height
+				)
+
+				if self.windowCropDisplayId != display.displayID, let activeStream = self.stream {
+					let excludedApplications = availableContent.applications.filter {
+						self.excludedProcessIds.contains($0.processID)
+					}
+					let filter = SCContentFilter(
+						display: display,
+						excludingApplications: excludedApplications,
+						exceptingWindows: []
+					)
+					do {
+						try await activeStream.updateContentFilter(filter)
+					} catch {
+						continue
+					}
+				}
+
+				await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+					self.queue.async {
+						if self.isRecording {
+							self.windowCropRect = cropRect
+							self.windowCropDisplayId = display.displayID
+						}
+						continuation.resume()
+					}
 				}
 			}
 		}
+	}
+
+	private static func captureDisplay(for frame: CGRect, from displays: [SCDisplay]) -> SCDisplay? {
+		let midpoint = CGPoint(x: frame.midX, y: frame.midY)
+		return displays.first(where: { $0.frame.contains(midpoint) })
+			?? displays.filter { $0.frame.intersects(frame) }.max {
+				$0.frame.intersection(frame).width * $0.frame.intersection(frame).height
+					< $1.frame.intersection(frame).width * $1.frame.intersection(frame).height
+			}
 	}
 
 	private static func scaleFactor(for displayId: CGDirectDisplayID) -> Int {
@@ -794,6 +958,8 @@ final class RecorderService {
 	private let queue = DispatchQueue(label: "recordly.screencapturekit.commands")
 	private let completionGroup = DispatchGroup()
 	private var succeeded = true
+	// Accessed only by serialized command operations.
+	private var captureStarted = false
 
 	private func enqueue(_ operation: @escaping () async -> Void) {
 		queue.async {
@@ -811,6 +977,7 @@ final class RecorderService {
 		enqueue {
 			do {
 				try await self.recorder.startCapture(configJSON: configJSON)
+				self.captureStarted = true
 			} catch {
 				self.succeeded = false
 				fputs("Error starting capture: \(error.localizedDescription)\n", stderr)
@@ -822,6 +989,9 @@ final class RecorderService {
 
 	func stop() {
 		enqueue {
+			// Failed startup already releases completionGroup. EOF must not do it again.
+			guard self.captureStarted else { return }
+			self.captureStarted = false
 			do {
 				let outputPath = try await self.recorder.stopCapture()
 				print("Recording stopped. Output path: \(outputPath)")
@@ -867,8 +1037,7 @@ guard CommandLine.arguments.count >= 2 else {
 }
 
 // Force CoreGraphics Services initialization on the main thread.
-// Without this, SCContentFilter(desktopIndependentWindow:) crashes with
-// CGS_REQUIRE_INIT because CGS is never initialised in a CLI tool.
+// ScreenCaptureKit still requires CoreGraphics Services to be initialized in a CLI tool.
 let _ = CGMainDisplayID()
 
 // Pre-flight check: ensure screen recording permission is granted before
@@ -923,10 +1092,12 @@ DispatchQueue.global(qos: .utility).async {
 		}
 
 		if input == "stop" {
-			service.stop()
 			break
 		}
 	}
+	// EOF means the Electron parent exited or restarted. Finalize and release
+	// capture devices just as we do for an explicit stop command.
+	service.stop()
 }
 
 if !service.waitUntilFinished() {

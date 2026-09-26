@@ -1,5 +1,7 @@
 import { loadAppSetting, saveAppSetting } from "../../lib/appSettings";
 import {
+	getDefaultBorderRadiusPercent,
+	legacyBorderRadiusPixelsToPercent,
 	normalizeExportBackendPreference,
 	normalizeExportMp4FrameRate,
 	normalizeExportPipelineModel,
@@ -15,9 +17,6 @@ type PersistedEditorControls = Pick<
 	| "backgroundBlur"
 	| "zoomMotionBlur"
 	| "zoomMotionBlurTuning"
-	| "zoomTemporalMotionBlur"
-	| "zoomMotionBlurSampleCount"
-	| "zoomMotionBlurShutterFraction"
 	| "connectZooms"
 	| "zoomInDurationMs"
 	| "zoomInOverlapMs"
@@ -66,9 +65,10 @@ type PartialEditorControls = Partial<PersistedEditorControls>;
 
 type PresetAutoCaptionSettings = ProjectEditorState["autoCaptionSettings"];
 type PresetCropRegion = ProjectEditorState["cropRegion"];
-type PresetWebcamSettings = Omit<ProjectEditorState["webcam"], "sourcePath">;
+type PresetWebcamSettings = Omit<ProjectEditorState["webcam"], "sourcePath" | "visibleRanges">;
 
 export interface EditorPresetSnapshot extends Omit<PersistedEditorControls, "webcam"> {
+	borderRadiusUnit: "percent";
 	cropRegion: PresetCropRegion;
 	webcam: PresetWebcamSettings;
 	autoCaptionSettings: PresetAutoCaptionSettings;
@@ -85,6 +85,7 @@ export interface EditorPreset {
 }
 
 export interface EditorPreferences extends PersistedEditorControls {
+	borderRadiusUnit: "percent";
 	customAspectWidth: string;
 	customAspectHeight: string;
 	customWallpapers: string[];
@@ -104,9 +105,6 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
 	backgroundBlur: DEFAULT_EDITOR_CONTROLS.backgroundBlur,
 	zoomMotionBlur: DEFAULT_EDITOR_CONTROLS.zoomMotionBlur,
 	zoomMotionBlurTuning: DEFAULT_EDITOR_CONTROLS.zoomMotionBlurTuning,
-	zoomTemporalMotionBlur: DEFAULT_EDITOR_CONTROLS.zoomTemporalMotionBlur,
-	zoomMotionBlurSampleCount: DEFAULT_EDITOR_CONTROLS.zoomMotionBlurSampleCount,
-	zoomMotionBlurShutterFraction: DEFAULT_EDITOR_CONTROLS.zoomMotionBlurShutterFraction,
 	connectZooms: DEFAULT_EDITOR_CONTROLS.connectZooms,
 	zoomInDurationMs: DEFAULT_EDITOR_CONTROLS.zoomInDurationMs,
 	zoomInOverlapMs: DEFAULT_EDITOR_CONTROLS.zoomInOverlapMs,
@@ -137,6 +135,7 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
 	cursorClickBounceDuration: DEFAULT_EDITOR_CONTROLS.cursorClickBounceDuration,
 	cursorSway: DEFAULT_EDITOR_CONTROLS.cursorSway,
 	borderRadius: DEFAULT_EDITOR_CONTROLS.borderRadius,
+	borderRadiusUnit: "percent",
 	padding: DEFAULT_EDITOR_CONTROLS.padding,
 	webcam: DEFAULT_EDITOR_CONTROLS.webcam,
 	aspectRatio: DEFAULT_EDITOR_CONTROLS.aspectRatio,
@@ -215,10 +214,15 @@ function normalizeEditorPresetSnapshot(candidate: unknown): EditorPresetSnapshot
 		normalizedPreferences,
 		normalizedPreferences,
 	);
-	const { sourcePath: _sourcePath, ...webcam } = normalizedControls.webcam;
+	const {
+		sourcePath: _sourcePath,
+		visibleRanges: _visibleRanges,
+		...webcam
+	} = normalizedControls.webcam;
 
 	return {
 		...normalizedControls,
+		borderRadiusUnit: "percent",
 		webcam,
 		cropRegion: normalizedCropRegion,
 		autoCaptionSettings: normalizePresetAutoCaptionSettings(raw.autoCaptionSettings),
@@ -372,9 +376,6 @@ function normalizeEditorControls(
 		backgroundBlur: normalized.backgroundBlur,
 		zoomMotionBlur: normalized.zoomMotionBlur,
 		zoomMotionBlurTuning: normalized.zoomMotionBlurTuning,
-		zoomTemporalMotionBlur: normalized.zoomTemporalMotionBlur,
-		zoomMotionBlurSampleCount: normalized.zoomMotionBlurSampleCount,
-		zoomMotionBlurShutterFraction: normalized.zoomMotionBlurShutterFraction,
 		connectZooms: normalized.connectZooms,
 		zoomInDurationMs: normalized.zoomInDurationMs,
 		zoomInOverlapMs: normalized.zoomInOverlapMs,
@@ -426,9 +427,20 @@ export function normalizeEditorPreferences(
 ): EditorPreferences {
 	const raw =
 		candidate && typeof candidate === "object" ? (candidate as Partial<EditorPreferences>) : {};
+	const controls =
+		raw.borderRadiusUnit === "percent" || typeof raw.borderRadius !== "number"
+			? raw
+			: {
+					...raw,
+					borderRadius:
+						raw.borderRadius === 0
+							? getDefaultBorderRadiusPercent()
+							: legacyBorderRadiusPixelsToPercent(raw.borderRadius),
+				};
 
 	return {
-		...normalizeEditorControls(raw, fallback),
+		...normalizeEditorControls(controls, fallback),
+		borderRadiusUnit: "percent",
 		customAspectWidth: normalizePositiveIntegerString(
 			raw.customAspectWidth,
 			fallback.customAspectWidth,

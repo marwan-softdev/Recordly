@@ -1,5 +1,6 @@
 {
 	"recording": {
+		"home": "首頁",
 		"disableSystemAudio": "停用系統音訊",
 		"enableSystemAudio": "啟用系統音訊",
 		"disableMicrophone": "停用麥克風",

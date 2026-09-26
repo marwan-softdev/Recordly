@@ -1,5 +1,6 @@
 import type { RefObject } from "react";
 import type { useVideoEditorAudio } from "../audio/useVideoEditorAudio";
+import { retimeCaptionFragment } from "../captionTimeline";
 import type { useAnnotationRegionCommands } from "../hooks/useAnnotationRegionCommands";
 import type { useAudioRegionCommands } from "../hooks/useAudioRegionCommands";
 import type { useCaptionCommands } from "../hooks/useCaptionCommands";
@@ -11,7 +12,8 @@ import type { useTimelineState } from "../state/useTimelineState";
 import TimelineEditor, { type TimelineEditorHandle } from "../timeline/TimelineEditor";
 
 type Props = {
-	timelineRef: RefObject<TimelineEditorHandle>;
+	panelRef?: RefObject<HTMLDivElement | null>;
+	timelineRef: RefObject<TimelineEditorHandle | null>;
 	timeline: ReturnType<typeof useTimelineState>;
 	projection: ReturnType<typeof useTimelineProjection>;
 	playback: ReturnType<typeof useEditorPlaybackControls>;
@@ -56,7 +58,13 @@ export function EditorTimelinePanel(props: Props) {
 	} = props;
 
 	return (
-		<div className="flex flex-shrink-0 flex-col" style={{ height: "15%", minHeight: 160 }}>
+		<div
+			ref={props.panelRef}
+			tabIndex={-1}
+			data-timeline-panel
+			className="outline-none flex flex-shrink-0 flex-col bg-transparent px-4 pb-4 pt-2"
+			style={{ height: "22%", minHeight: 180, maxHeight: 280 }}
+		>
 			<TimelineEditor
 				ref={timelineRef}
 				videoDuration={projection.timelineDuration}
@@ -80,6 +88,7 @@ export function EditorTimelinePanel(props: Props) {
 				trimRegions={timeline.trimRegions}
 				clipRegions={timeline.clipRegions}
 				onClipSplit={clipCommands.handleClipSplit}
+				onClipDelete={clipCommands.handleClipDelete}
 				onClipSpanChange={clipCommands.handleClipSpanChange}
 				selectedClipId={timeline.selectedClipId}
 				onSelectClip={clipCommands.handleSelectClip}
@@ -90,15 +99,41 @@ export function EditorTimelinePanel(props: Props) {
 				selectedAudioId={timeline.selectedAudioId}
 				onSelectAudio={audioCommands.handleSelectAudio}
 				captionRegions={projection.effectiveCaptionRegions}
-				onCaptionSpanChange={(id, span) =>
-					captionCommands.handleCaptionRetime(id, {
-						startMs: projection.mapTimelineTimeToSourceTime(span.start),
-						endMs: projection.mapTimelineTimeToSourceTime(span.end),
-					})
+				onCaptionSpanChange={(id, span) => {
+					const fragment = projection.effectiveCaptionRegions.find(
+						(cue) => cue.id === id,
+					);
+					if (!fragment) return;
+					captionCommands.handleCaptionRetime(
+						fragment.sourceCueId,
+						retimeCaptionFragment(fragment, span),
+					);
+				}}
+				selectedCaptionId={
+					projection.effectiveCaptionRegions.find(
+						(cue) =>
+							cue.sourceCueId === timeline.selectedCaptionId &&
+							currentTime * 1000 >= cue.startMs &&
+							currentTime * 1000 < cue.endMs,
+					)?.id ??
+					projection.effectiveCaptionRegions.find(
+						(cue) => cue.sourceCueId === timeline.selectedCaptionId,
+					)?.id ??
+					null
 				}
-				selectedCaptionId={timeline.selectedCaptionId}
-				onSelectCaption={captionCommands.handleSelectCaption}
-				onCaptionDelete={captionCommands.handleCaptionDelete}
+				onSelectCaption={(id) => {
+					const fragment = projection.effectiveCaptionRegions.find(
+						(cue) => cue.id === id,
+					);
+					captionCommands.handleSelectCaption(fragment?.sourceCueId ?? null);
+					if (fragment) playback.handleTimelineSeek(fragment.startMs / 1000);
+				}}
+				onCaptionDelete={(id) => {
+					const fragment = projection.effectiveCaptionRegions.find(
+						(cue) => cue.id === id,
+					);
+					if (fragment) captionCommands.handleCaptionDelete(fragment.sourceCueId);
+				}}
 				onCaptionAdded={captionCommands.handleCaptionAdded}
 				captionsEnabled={timeline.autoCaptionSettings.enabled}
 				captionQuickAddEnabled={timeline.autoCaptionSettings.timelineQuickAdd}

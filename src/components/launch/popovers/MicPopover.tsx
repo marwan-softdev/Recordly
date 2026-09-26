@@ -1,4 +1,4 @@
-import { MicrophoneSlashIcon, SpeakerHighIcon, SpeakerXIcon } from "@phosphor-icons/react";
+import { MicrophoneSlashIcon, SpeakerHighIcon, SpeakerXIcon } from "@/components/ui/icons";
 import { useScopedT } from "@/contexts/I18nContext";
 import { DropdownItem, HudPopover, MicDeviceRow } from "./PopoverScaffold";
 import { useLaunchPopoverCoordinator } from "./LaunchPopoverCoordinator";

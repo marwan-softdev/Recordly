@@ -12,9 +12,9 @@ export function useHudBarDrag({
 	hudBarRef,
 	recordingWebcamPreviewContainerRef,
 }: {
-	hudContentRef: RefObject<HTMLDivElement>;
-	hudBarRef: RefObject<HTMLDivElement>;
-	recordingWebcamPreviewContainerRef: RefObject<HTMLDivElement>;
+	hudContentRef: RefObject<HTMLDivElement | null>;
+	hudBarRef: RefObject<HTMLDivElement | null>;
+	recordingWebcamPreviewContainerRef: RefObject<HTMLDivElement | null>;
 }) {
 	const [recordingHudOffset, setRecordingHudOffset] = useState(DEFAULT_RECORDING_HUD_OFFSET);
 	const [isHudDragging, setIsHudDragging] = useState(false);

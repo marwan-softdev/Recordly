@@ -418,6 +418,7 @@ function cancelRecording(
 	chunks: { current: Blob[] },
 	webcamRecorder?: ReturnType<typeof createMockMediaRecorder> | null,
 	webcamChunks?: { current: Blob[] },
+	stopMicFallbackRecorder?: () => Promise<Blob | null>,
 ) {
 	if (webcamChunks) webcamChunks.current = [];
 	if (webcamRecorder && webcamRecorder.state !== "inactive") {
@@ -425,6 +426,7 @@ function cancelRecording(
 	}
 
 	if (isNativeRecording) {
+		void stopMicFallbackRecorder?.();
 		return { cancelled: true, wasNative: true };
 	}
 
@@ -759,6 +761,23 @@ describe("useScreenRecorder state machine", () => {
 			expect(result.wasNative).toBe(true);
 			expect(webcam.stop).toHaveBeenCalled();
 			expect(recorder.stop).not.toHaveBeenCalled();
+		});
+
+		it("stops the mic fallback recorder when cancelling native recording", () => {
+			const chunks = { current: [] as Blob[] };
+			const stopMicFallbackRecorder = vi.fn(() => Promise.resolve(null));
+
+			const result = cancelRecording(
+				recorder,
+				true,
+				chunks,
+				null,
+				undefined,
+				stopMicFallbackRecorder,
+			);
+
+			expect(result.wasNative).toBe(true);
+			expect(stopMicFallbackRecorder).toHaveBeenCalled();
 		});
 
 		it("handles cancel when recorder is already inactive", () => {

@@ -19,7 +19,7 @@ type Input = {
 	t: ReturnType<typeof useI18n>["t"];
 	videoPath: string | null;
 	videoSourcePath: string | null;
-	videoPlaybackRef: RefObject<VideoPlaybackRef>;
+	videoPlaybackRef: RefObject<VideoPlaybackRef | null>;
 	isPlaying: boolean;
 	duration: number;
 	error: string | null;

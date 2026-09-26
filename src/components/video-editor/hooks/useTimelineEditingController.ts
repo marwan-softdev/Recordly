@@ -1,6 +1,6 @@
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 import { useCallback } from "react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/toast";
 import type { useI18n } from "@/contexts/I18nContext";
 import type { useShortcuts } from "@/contexts/ShortcutsContext";
 import { useVideoEditorAudio } from "../audio/useVideoEditorAudio";
@@ -25,6 +25,7 @@ type Input = {
 	t: ReturnType<typeof useI18n>["t"];
 	shortcuts: ReturnType<typeof useShortcuts>["shortcuts"];
 	isMac: boolean;
+	appPlatform: string;
 	timeline: ReturnType<typeof useTimelineState>;
 	appearance: ReturnType<typeof useAppearanceState>;
 	videoPath: string | null;
@@ -38,8 +39,8 @@ type Input = {
 	isPreviewReady: boolean;
 	setActiveEffectSection: Dispatch<SetStateAction<EditorEffectSection>>;
 	setAutoSuggestZoomsTrigger: Dispatch<SetStateAction<number>>;
-	videoPlaybackRef: RefObject<VideoPlaybackRef>;
-	timelineRef: RefObject<TimelineEditorHandle>;
+	videoPlaybackRef: RefObject<VideoPlaybackRef | null>;
+	timelineRef: RefObject<TimelineEditorHandle | null>;
 	nextZoomIdRef: MutableRefObject<number>;
 	nextClipIdRef: MutableRefObject<number>;
 	nextAudioIdRef: MutableRefObject<number>;
@@ -87,13 +88,12 @@ export function useTimelineEditingController(input: Input) {
 		selectedClipId: timeline.selectedClipId,
 		clipRegions: timeline.clipRegions,
 		audioRegions: timeline.audioRegions,
-		effectiveSpeedRegions: projection.effectiveSpeedRegions,
 		sourceAudioTrackSettingsByClip: timeline.sourceAudioTrackSettingsByClip,
 		setSourceAudioTrackSettingsByClip: timeline.setSourceAudioTrackSettingsByClip,
 		defaultSourceAudioTrackSettings: timeline.defaultSourceAudioTrackSettings,
 		setDefaultSourceAudioTrackSettings: timeline.setDefaultSourceAudioTrackSettings,
-		currentTime: input.currentTime,
 		timelineTime: projection.timelinePlayheadTime,
+		currentTime: projection.mapTimelineTimeToSourceTime(input.currentTime * 1000) / 1000,
 		duration: input.duration,
 		isPlaying: input.isPlaying,
 		previewVolume: input.previewVolume,
@@ -105,11 +105,11 @@ export function useTimelineEditingController(input: Input) {
 		videoPlaybackRef: input.videoPlaybackRef,
 		timelineRef: input.timelineRef,
 		playSourceAudioPreview: audio.playSourceAudioPreview,
-		mapTimelineTimeToSourceTime: projection.mapTimelineTimeToSourceTime,
 		timelinePlayheadTime: projection.timelinePlayheadTime,
 		timelineDuration: projection.timelineDuration,
 	});
 	const captionCommands = useCaptionCommands({
+		clipRegions: timeline.clipRegions,
 		autoCaptions: timeline.autoCaptions,
 		setAutoCaptions: timeline.setAutoCaptions,
 		setAutoCaptionSettings: timeline.setAutoCaptionSettings,
@@ -121,10 +121,10 @@ export function useTimelineEditingController(input: Input) {
 		setActiveEffectSection: input.setActiveEffectSection,
 		videoPlaybackRef: input.videoPlaybackRef,
 		mapSourceTimeToTimelineTime: projection.mapSourceTimeToTimelineTime,
-		mapTimelineTimeToSourceTime: projection.mapTimelineTimeToSourceTime,
 		handleSeek: playback.handleSeek,
 	});
 	const zoomCommands = useZoomRegionCommands({
+		setSelectedClipId: timeline.setSelectedClipId,
 		videoPath: input.videoPath,
 		setZoomRegions: timeline.setZoomRegions,
 		selectedZoomId: timeline.selectedZoomId,
@@ -141,6 +141,7 @@ export function useTimelineEditingController(input: Input) {
 		(id: string | null) => {
 			timeline.setSelectedAnnotationId(id);
 			if (id) {
+				timeline.setSelectedClipId(null);
 				timeline.setSelectedZoomId(null);
 				timeline.setSelectedAudioId(null);
 				timeline.setSelectedCaptionId(null);
@@ -148,12 +149,14 @@ export function useTimelineEditingController(input: Input) {
 		},
 		[
 			timeline.setSelectedAnnotationId,
+			timeline.setSelectedClipId,
 			timeline.setSelectedZoomId,
 			timeline.setSelectedAudioId,
 			timeline.setSelectedCaptionId,
 		],
 	);
 	const freshZoom = useFreshRecordingAutoZoom({
+		appPlatform: input.appPlatform,
 		videoPath: input.videoPath,
 		loading: input.loading,
 		isPreviewReady: input.isPreviewReady,
@@ -172,13 +175,13 @@ export function useTimelineEditingController(input: Input) {
 			input.pendingFreshRecordingAutoSuggestTelemetryCountRef,
 	});
 	const clipCommands = useClipRegionCommands({
+		setAnnotationRegions: timeline.setAnnotationRegions,
+		setAudioRegions: timeline.setAudioRegions,
+		sourceDurationMs: input.duration * 1000,
 		clipRegions: timeline.clipRegions,
 		setClipRegions: timeline.setClipRegions,
 		zoomRegions: timeline.zoomRegions,
 		setZoomRegions: timeline.setZoomRegions,
-		setAnnotationRegions: timeline.setAnnotationRegions,
-		setSpeedRegions: timeline.setSpeedRegions,
-		setAudioRegions: timeline.setAudioRegions,
 		selectedClipId: timeline.selectedClipId,
 		setSelectedClipId: timeline.setSelectedClipId,
 		setSelectedZoomId: timeline.setSelectedZoomId,
@@ -190,6 +193,7 @@ export function useTimelineEditingController(input: Input) {
 		t: input.t,
 	});
 	const audioCommands = useAudioRegionCommands({
+		setSelectedClipId: timeline.setSelectedClipId,
 		setAudioRegions: timeline.setAudioRegions,
 		selectedAudioId: timeline.selectedAudioId,
 		setSelectedAudioId: timeline.setSelectedAudioId,
@@ -200,6 +204,7 @@ export function useTimelineEditingController(input: Input) {
 		nextAudioIdRef: input.nextAudioIdRef,
 	});
 	const annotationCommands = useAnnotationRegionCommands({
+		onSelectAnnotation: handleSelectAnnotation,
 		setAnnotationRegions: timeline.setAnnotationRegions,
 		selectedAnnotationId: timeline.selectedAnnotationId,
 		setSelectedAnnotationId: timeline.setSelectedAnnotationId,

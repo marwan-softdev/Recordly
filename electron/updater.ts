@@ -8,6 +8,7 @@ import { readAppSetting, writeAppSetting } from "./appSettingsStore";
 import { EXPERIMENTAL_UPDATE_DESCRIPTION, getUpdateChannelConfiguration } from "./updateChannel";
 
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const INITIAL_UPDATE_CHECK_DELAY_MS = 15 * 1000;
 export const UPDATE_REMINDER_DELAY_MS = 3 * 60 * 60 * 1000;
 const DISMISSED_READY_REMINDER_DELAY_MS = 5 * 60 * 1000;
 const AUTO_UPDATES_DISABLED = process.env.RECORDLY_DISABLE_AUTO_UPDATES === "1";
@@ -71,6 +72,7 @@ let updaterInitialized = false;
 let updateCheckInProgress = false;
 let manualCheckRequested = false;
 let periodicCheckTimer: NodeJS.Timeout | null = null;
+let initialCheckTimer: NodeJS.Timeout | null = null;
 let deferredReminderTimer: NodeJS.Timeout | null = null;
 let devPreviewProgressTimer: NodeJS.Timeout | null = null;
 let currentToastPayload: UpdateToastPayload | null = null;
@@ -173,6 +175,10 @@ function showMessageBox(
 	getMainWindow: () => BrowserWindow | null,
 	options: MessageBoxOptions,
 ): Promise<MessageBoxReturnValue> {
+	if (process.platform !== "darwin") {
+		return dialog.showMessageBox(options);
+	}
+
 	const window = getDialogWindow(getMainWindow);
 	return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
 }
@@ -576,12 +582,19 @@ async function showAvailableUpdateDialog(
 	getMainWindow: () => BrowserWindow | null,
 	version: string,
 	sendToRenderer?: UpdateToastSender,
+	options?: { isPreview?: boolean; isExperimental?: boolean },
 ) {
+	const isPreview = Boolean(options?.isPreview);
+	const isExperimental = options?.isExperimental ?? getExperimentalUpdatesEnabled();
 	const result = await showMessageBox(getMainWindow, {
 		type: "info",
-		title: "Update Available",
-		message: `Recordly ${version} is available.`,
-		detail: "Install and restart now, or remind me later.",
+		title: isExperimental ? "Experimental Update Available" : "Update Available",
+		message: `Recordly ${version} is available${isExperimental ? " on the experimental channel" : ""}.`,
+		detail: isPreview
+			? `${isExperimental ? EXPERIMENTAL_UPDATE_DESCRIPTION : "This is a development preview of the standard update flow."} No real update will be installed.`
+			: isExperimental
+				? EXPERIMENTAL_UPDATE_DESCRIPTION
+				: "Install and restart now, or remind me later.",
 		buttons: ["Install & Restart", "Later"],
 		defaultId: 0,
 		cancelId: 1,
@@ -589,7 +602,21 @@ async function showAvailableUpdateDialog(
 	});
 
 	if (result.response === 0) {
+		if (isPreview) {
+			await showMessageBox(getMainWindow, {
+				type: "info",
+				title: "Preview Only",
+				message: "No real update was installed.",
+				detail: "This was only a manual development preview of the update prompt.",
+			});
+			return;
+		}
+
 		await downloadAvailableUpdate(sendToRenderer, { installAfterDownload: true });
+		return;
+	}
+
+	if (isPreview) {
 		return;
 	}
 
@@ -642,6 +669,29 @@ async function showDownloadedUpdateDialog(
 
 		deferUpdateReminder(getMainWindow, undefined, UPDATE_REMINDER_DELAY_MS);
 	}
+}
+
+export function previewNativeUpdateDialog(getMainWindow: () => BrowserWindow | null) {
+	return showAvailableUpdateDialog(getMainWindow, DEV_UPDATE_PREVIEW_VERSION, undefined, {
+		isPreview: true,
+		isExperimental: DEV_UPDATE_PREVIEW_IS_EXPERIMENTAL,
+	});
+}
+
+async function showUpdateErrorDialog(
+	getMainWindow: () => BrowserWindow | null,
+	version: string,
+	error: unknown,
+) {
+	await showMessageBox(getMainWindow, {
+		type: "error",
+		title: "Update Failed",
+		message: `Recordly ${version} could not be downloaded.`,
+		detail: String(error),
+		buttons: ["OK"],
+		defaultId: 0,
+		noLink: true,
+	});
 }
 
 export async function checkForAppUpdates(
@@ -745,10 +795,8 @@ export function setupAutoUpdates(
 			return;
 		}
 
-		if (manualCheckRequested) {
-			void showAvailableUpdateDialog(getMainWindow, info.version, sendToRenderer);
-			manualCheckRequested = false;
-		}
+		void showAvailableUpdateDialog(getMainWindow, info.version, sendToRenderer);
+		manualCheckRequested = false;
 	});
 
 	autoUpdater.on("update-not-available", () => {
@@ -811,10 +859,13 @@ export function setupAutoUpdates(
 			downloadInProgress = false;
 			downloadToastDismissed = false;
 			installAfterDownloadRequested = false;
-			emitUpdateToastState(
+			const shownInRenderer = emitUpdateToastState(
 				sendToRenderer,
 				createUpdateErrorToastPayload(availableVersion, error),
 			);
+			if (!shownInRenderer) {
+				void showUpdateErrorDialog(getMainWindow, availableVersion, error);
+			}
 		}
 	});
 
@@ -856,7 +907,10 @@ export function setupAutoUpdates(
 		void showDownloadedUpdateDialog(getMainWindow, info.version);
 	});
 
-	void checkForAppUpdates(getMainWindow);
+	initialCheckTimer = setTimeout(() => {
+		initialCheckTimer = null;
+		void checkForAppUpdates(getMainWindow);
+	}, INITIAL_UPDATE_CHECK_DELAY_MS);
 	periodicCheckTimer = setInterval(() => {
 		void checkForAppUpdates(getMainWindow);
 	}, UPDATE_CHECK_INTERVAL_MS);
@@ -864,6 +918,10 @@ export function setupAutoUpdates(
 	app.on("before-quit", () => {
 		clearDeferredReminderTimer();
 		clearDevPreviewProgressTimer();
+		if (initialCheckTimer) {
+			clearTimeout(initialCheckTimer);
+			initialCheckTimer = null;
+		}
 		if (periodicCheckTimer) {
 			clearInterval(periodicCheckTimer);
 			periodicCheckTimer = null;

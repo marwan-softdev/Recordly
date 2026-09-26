@@ -1,5 +1,6 @@
 {
 	"recording": {
+		"home": "Start",
 		"disableSystemAudio": "Systeemaudio uitschakelen",
 		"enableSystemAudio": "Systeemaudio inschakelen",
 		"disableMicrophone": "Microfoon uitschakelen",

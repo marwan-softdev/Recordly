@@ -3,7 +3,7 @@ import type { AspectRatio } from "@/utils/aspectRatioUtils";
 import type { useVideoEditorAudio } from "../audio/useVideoEditorAudio";
 import type { useAppearanceState } from "../state/useAppearanceState";
 import type { useTimelineState } from "../state/useTimelineState";
-import type { CursorTelemetryPoint, SpeedRegion, ZoomRegion } from "../types";
+import type { CursorTelemetryPoint, ZoomRegion } from "../types";
 import VideoPlayback, { type VideoPlaybackRef } from "../VideoPlayback";
 
 type PlaybackProps = ComponentProps<typeof VideoPlayback>;
@@ -21,7 +21,7 @@ type Props = {
 	videoPath: string | null;
 	previewVersion: number;
 	aspectRatio: AspectRatio;
-	playbackRef: RefObject<VideoPlaybackRef>;
+	playbackRef: RefObject<VideoPlaybackRef | null>;
 	currentTime: number;
 	isPlaying: boolean;
 	previewVolume: number;
@@ -30,14 +30,13 @@ type Props = {
 	timeline: ReturnType<typeof useTimelineState>;
 	audio: ReturnType<typeof useVideoEditorAudio>;
 	effectiveZoomRegions: ZoomRegion[];
-	effectiveSpeedRegions: SpeedRegion[];
 	effectiveCursorTelemetry: CursorTelemetryPoint[];
 	effectiveShowCursor: boolean;
 	setDuration: Dispatch<SetStateAction<number>>;
 	setIsPreviewReady: Dispatch<SetStateAction<boolean>>;
 	setCurrentTime: Dispatch<SetStateAction<number>>;
 	setIsPlaying: Dispatch<SetStateAction<boolean>>;
-	setError: Dispatch<SetStateAction<string | null>>;
+	setError: (message: string | null) => void;
 	handlers: Handlers;
 };
 
@@ -54,7 +53,6 @@ export function EditorVideoPreview({
 	timeline,
 	audio,
 	effectiveZoomRegions,
-	effectiveSpeedRegions,
 	effectiveCursorTelemetry,
 	effectiveShowCursor,
 	setDuration,
@@ -66,6 +64,7 @@ export function EditorVideoPreview({
 }: Props) {
 	return (
 		<VideoPlayback
+			clipRegions={timeline.clipRegions}
 			key={`${videoPath || "no-video"}:${previewVersion}:inline`}
 			aspectRatio={aspectRatio}
 			ref={playbackRef}
@@ -99,8 +98,6 @@ export function EditorVideoPreview({
 			webcamVideoPath={
 				appearance.webcam.sourcePath ? appearance.resolvedWebcamVideoUrl : null
 			}
-			trimRegions={timeline.trimRegions}
-			speedRegions={effectiveSpeedRegions}
 			annotationRegions={timeline.annotationRegions}
 			autoCaptions={timeline.autoCaptions}
 			autoCaptionSettings={timeline.autoCaptionSettings}

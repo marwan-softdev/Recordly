@@ -62,7 +62,6 @@ export async function resolveRecordingSessionManifest(
 			typeof parsed.webcamFileName === "string" && parsed.webcamFileName.trim()
 				? parsed.webcamFileName.trim()
 				: null;
-
 		if (!webcamFileName) {
 			return {
 				videoPath: normalizedVideoPath,

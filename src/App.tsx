@@ -1,54 +1,57 @@
-import { useEffect, useState } from "react";
-import { AnnouncementDialog } from "./components/announcements/AnnouncementDialog";
-import { LiveAnnouncementNotifications } from "./components/announcements/LiveAnnouncementNotifications";
-import { CountdownOverlay } from "./components/countdown/CountdownOverlay";
-import { LaunchWindow } from "./components/launch/LaunchWindow";
-import { SourceSelector } from "./components/launch/SourceSelector";
-import { UpdateToastWindow } from "./components/launch/UpdateToastWindow";
-import { Toaster } from "./components/ui/sonner";
-import { ShortcutsConfigDialog } from "./components/video-editor/ShortcutsConfigDialog";
-import VideoEditor from "./components/video-editor/VideoEditor";
+import { Card } from "@heroui/react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useI18n } from "./contexts/I18nContext";
-import { ShortcutsProvider } from "./contexts/ShortcutsContext";
-import { loadAllCustomFonts } from "./lib/customFonts";
+
+const HudWindow = lazy(() => import("./components/launch/HudWindow"));
+const SourceSelector = lazy(() =>
+	import("./components/launch/SourceSelector").then((module) => ({
+		default: module.SourceSelector,
+	})),
+);
+const CountdownOverlay = lazy(() =>
+	import("./components/countdown/CountdownOverlay").then((module) => ({
+		default: module.CountdownOverlay,
+	})),
+);
+const UpdateToastWindow = lazy(() =>
+	import("./components/launch/UpdateToastWindow").then((module) => ({
+		default: module.UpdateToastWindow,
+	})),
+);
+const EditorWindow = lazy(() => import("./components/video-editor/EditorWindow"));
 
 export default function App() {
-	const [windowType, setWindowType] = useState("");
+	const [windowType] = useState(
+		() => new URLSearchParams(window.location.search).get("windowType") || "",
+	);
 	const { t } = useI18n();
 	const appIconSrc = "/app-icons/recordly-128.png";
 
 	useEffect(() => {
-		const params = new URLSearchParams(window.location.search);
-		const type = params.get("windowType") || "";
-		setWindowType(type);
-		document.documentElement.dataset.windowType = type;
+		document.documentElement.dataset.windowType = windowType;
 
 		if (
-			type === "hud-overlay" ||
-			type === "source-selector" ||
-			type === "countdown" ||
-			type === "update-toast"
+			windowType === "hud-overlay" ||
+			windowType === "source-selector" ||
+			windowType === "countdown" ||
+			windowType === "update-toast"
 		) {
 			document.body.style.background = "transparent";
 			document.documentElement.style.background = "transparent";
 			document.getElementById("root")?.style.setProperty("background", "transparent");
 		}
 
-		if (type === "hud-overlay") {
+		if (windowType === "hud-overlay") {
 			document.documentElement.classList.add("hud-overlay-window");
 			document.body.classList.add("hud-overlay-window");
 			document.getElementById("root")?.classList.add("hud-overlay-window");
 			window.electronAPI?.hudOverlaySetIgnoreMouse?.(true);
-		} else if (type === "update-toast") {
+		} else if (windowType === "update-toast") {
 			document.documentElement.style.overflow = "visible";
 			document.body.style.overflow = "visible";
 			document.getElementById("root")?.style.setProperty("overflow", "visible");
 		}
-
-		loadAllCustomFonts().catch((error) => {
-			console.error("Failed to load custom fonts:", error);
-		});
-	}, []);
+	}, [windowType]);
 
 	useEffect(() => {
 		document.title =
@@ -57,35 +60,27 @@ export default function App() {
 				: t("app.name", "Recordly");
 	}, [windowType, t]);
 
+	let content;
 	switch (windowType) {
 		case "hud-overlay":
-			return (
-				<>
-					<LaunchWindow />
-					<Toaster className="pointer-events-auto" />
-				</>
-			);
+			content = <HudWindow />;
+			break;
 		case "source-selector":
-			return <SourceSelector />;
+			content = <SourceSelector />;
+			break;
 		case "countdown":
-			return <CountdownOverlay />;
+			content = <CountdownOverlay />;
+			break;
 		case "update-toast":
-			return <UpdateToastWindow />;
+			content = <UpdateToastWindow />;
+			break;
 		case "editor":
-			return (
-				<>
-					<ShortcutsProvider>
-						<VideoEditor />
-						<ShortcutsConfigDialog />
-					</ShortcutsProvider>
-					<AnnouncementDialog audience="editor" />
-					<LiveAnnouncementNotifications audience="editor" />
-				</>
-			);
+			content = <EditorWindow />;
+			break;
 		default:
-			return (
+			content = (
 				<div className="flex h-full w-full items-center justify-center bg-editor-bg text-foreground">
-					<div className="flex items-center gap-4 rounded-2xl border border-foreground/10 bg-foreground/5 px-6 py-5 shadow-2xl shadow-black/30 backdrop-blur-xl">
+					<Card className="flex-row items-center gap-4 px-6 py-5">
 						<img
 							src={appIconSrc}
 							alt={t("app.name", "Recordly")}
@@ -99,8 +94,10 @@ export default function App() {
 								{t("app.subtitle", "Screen recording and editing")}
 							</p>
 						</div>
-					</div>
+					</Card>
 				</div>
 			);
 	}
+
+	return <Suspense fallback={null}>{content}</Suspense>;
 }

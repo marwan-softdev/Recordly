@@ -1,22 +1,19 @@
+import { createCountdownController } from "../../countdownController";
 import fs from "node:fs/promises";
-import { app, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { hasAppSetting, readAppSettingsStore, writeAppSettingsStore } from "../../appSettingsStore";
 import { hideCursor } from "../../cursorHider";
-import { closeCountdownWindow, createCountdownWindow, getCountdownWindow } from "../../windows";
+import { createCountdownWindow } from "../../windows";
 import { COUNTDOWN_SETTINGS_FILE, RECORDINGS_SETTINGS_FILE, SHORTCUTS_FILE } from "../constants";
 import {
 	createRecordingPreferencesStore,
 	type RecordingPreferencesPatch,
 } from "../settings/recordingPreferencesStore";
 import {
-	countdownCancelled,
 	countdownInProgress,
 	countdownRemaining,
-	countdownTimer,
-	setCountdownCancelled,
 	setCountdownInProgress,
 	setCountdownRemaining,
-	setCountdownTimer,
 } from "../state";
 import { parseJsonWithByteOrderMark } from "../utils";
 
@@ -43,8 +40,23 @@ function getBrowserMicrophoneProfileFromEnv() {
 }
 
 export function registerSettingsHandlers() {
+	ipcMain.handle(
+		"get-window-fullscreen",
+		(event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false,
+	);
 	ipcMain.handle("app:getVersion", () => {
 		return app.getVersion();
+	});
+
+	ipcMain.handle("get-window-chrome", (event) => {
+		const win = BrowserWindow.fromWebContents(event.sender);
+		return {
+			trafficLightsVisible:
+				process.platform === "darwin" &&
+				!!win &&
+				!win.isFullScreen() &&
+				!win.isSimpleFullScreen(),
+		};
 	});
 
 	ipcMain.handle("get-platform", () => {
@@ -185,79 +197,12 @@ export function registerSettingsHandlers() {
 		}
 	});
 
-	ipcMain.handle("start-countdown", async (_, seconds: number) => {
-		if (countdownInProgress) {
-			return { success: false, error: "Countdown already in progress" };
-		}
-
-		setCountdownInProgress(true);
-		setCountdownCancelled(false);
-		setCountdownRemaining(seconds);
-
-		const countdownWin = createCountdownWindow();
-
-		if (countdownWin.webContents.isLoadingMainFrame()) {
-			await new Promise<void>((resolve) => {
-				countdownWin.webContents.once("did-finish-load", () => {
-					resolve();
-				});
-			});
-		}
-
-		return new Promise<{ success: boolean; cancelled?: boolean }>((resolve) => {
-			let remaining = seconds;
-			setCountdownRemaining(remaining);
-
-			countdownWin.webContents.send("countdown-tick", remaining);
-
-			setCountdownTimer(
-				setInterval(() => {
-					if (countdownCancelled) {
-						if (countdownTimer) {
-							clearInterval(countdownTimer);
-							setCountdownTimer(null);
-						}
-						closeCountdownWindow();
-						setCountdownInProgress(false);
-						setCountdownRemaining(null);
-						resolve({ success: false, cancelled: true });
-						return;
-					}
-
-					remaining--;
-					setCountdownRemaining(remaining);
-
-					if (remaining <= 0) {
-						if (countdownTimer) {
-							clearInterval(countdownTimer);
-							setCountdownTimer(null);
-						}
-						closeCountdownWindow();
-						setCountdownInProgress(false);
-						setCountdownRemaining(null);
-						resolve({ success: true });
-					} else {
-						const win = getCountdownWindow();
-						if (win && !win.isDestroyed()) {
-							win.webContents.send("countdown-tick", remaining);
-						}
-					}
-				}, 1000),
-			);
-		});
+	const countdown = createCountdownController(createCountdownWindow, (remaining) => {
+		setCountdownRemaining(remaining);
+		setCountdownInProgress(remaining !== null);
 	});
-
-	ipcMain.handle("cancel-countdown", () => {
-		setCountdownCancelled(true);
-		setCountdownInProgress(false);
-		setCountdownRemaining(null);
-		if (countdownTimer) {
-			clearInterval(countdownTimer);
-			setCountdownTimer(null);
-		}
-		closeCountdownWindow();
-		return { success: true };
-	});
+	ipcMain.handle("start-countdown", (_, seconds: number) => countdown.start(seconds));
+	ipcMain.handle("cancel-countdown", () => countdown.cancel());
 
 	ipcMain.handle("get-active-countdown", () => {
 		return {

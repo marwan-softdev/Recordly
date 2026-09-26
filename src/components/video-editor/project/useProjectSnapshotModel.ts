@@ -41,15 +41,12 @@ export function useProjectSnapshotModel({
 		[project.videoPath, project.videoSourcePath],
 	);
 	const projectDisplayName = useMemo(() => {
-		const fileName =
-			project.currentProjectPath?.split(/[\\/]/).pop() ??
-			currentSourcePath?.split(/[\\/]/).pop() ??
-			"";
+		const fileName = project.currentProjectPath?.split(/[\\/]/).pop() ?? "Untitled Project";
 		return (
 			fileName.replace(/\.recordly$/i, "").replace(/\.[^.]+$/, "") ||
-			t("editor.project.untitled", "Untitled")
+			t("editor.project.untitled", "Untitled Project")
 		);
-	}, [project.currentProjectPath, currentSourcePath, t]);
+	}, [project.currentProjectPath, t]);
 
 	useEffect(() => {
 		if (!project.isEditingProjectName) project.setProjectNameDraft(projectDisplayName);
@@ -79,9 +76,6 @@ export function useProjectSnapshotModel({
 				backgroundBlur: appearance.backgroundBlur,
 				zoomMotionBlur: appearance.zoomMotionBlur,
 				zoomMotionBlurTuning: appearance.zoomMotionBlurTuning,
-				zoomTemporalMotionBlur: appearance.zoomTemporalMotionBlur,
-				zoomMotionBlurSampleCount: appearance.zoomMotionBlurSampleCount,
-				zoomMotionBlurShutterFraction: appearance.zoomMotionBlurShutterFraction,
 				connectZooms: appearance.connectZooms,
 				zoomInDurationMs: appearance.zoomInDurationMs,
 				zoomInOverlapMs: appearance.zoomInOverlapMs,
@@ -144,9 +138,6 @@ export function useProjectSnapshotModel({
 			appearance.backgroundBlur,
 			appearance.zoomMotionBlur,
 			appearance.zoomMotionBlurTuning,
-			appearance.zoomTemporalMotionBlur,
-			appearance.zoomMotionBlurSampleCount,
-			appearance.zoomMotionBlurShutterFraction,
 			appearance.connectZooms,
 			appearance.zoomInDurationMs,
 			appearance.zoomInOverlapMs,

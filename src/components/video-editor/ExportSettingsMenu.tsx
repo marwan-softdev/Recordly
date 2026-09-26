@@ -1,5 +1,6 @@
-import { DownloadSimple as Download, FilmSlate as Film, Image } from "@phosphor-icons/react";
-import { LayoutGroup, motion } from "motion/react";
+import { DownloadSimple as Download, FilmSlate as Film, Image } from "@/components/ui/icons";
+import { Card, Label, Description, TagGroup, Tag } from "@heroui/react";
+import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useScopedT } from "@/contexts/I18nContext";
@@ -13,7 +14,6 @@ import type {
 	GifSizePreset,
 } from "@/lib/exporter";
 import { GIF_FRAME_RATES, GIF_SIZE_PRESETS, MP4_FRAME_RATES } from "@/lib/exporter";
-import { cn } from "@/lib/utils";
 
 interface ExportSettingsMenuProps {
 	exportFormat: ExportFormat;
@@ -43,6 +43,56 @@ interface ExportSettingsMenuProps {
 	className?: string;
 }
 
+function Choices<T extends string | number>({
+	label,
+	value,
+	options,
+	onChange,
+}: {
+	label: string;
+	value: T;
+	options: { value: T; label: ReactNode; textValue?: string; description?: string }[];
+	onChange?: (value: T) => void;
+}) {
+	return (
+		<div className="flex flex-col gap-2">
+			<Label>{label}</Label>
+			<TagGroup
+				aria-label={label}
+				selectionMode="single"
+				disallowEmptySelection
+				selectedKeys={[String(value)]}
+				onSelectionChange={(keys) => {
+					if (keys === "all") return;
+					const selected = options.find((option) => keys.has(String(option.value)));
+					if (selected) onChange?.(selected.value);
+				}}
+				size="lg"
+			>
+				<TagGroup.List className="flex gap-2">
+					{options.map((option) => (
+						<Tag
+							key={option.value}
+							id={String(option.value)}
+							textValue={
+								option.textValue ??
+								(typeof option.label === "string"
+									? option.label
+									: String(option.value))
+							}
+							className="h-auto min-h-10 flex-1 justify-center flex-col gap-0.5 py-2"
+						>
+							{option.label}
+							{option.description && (
+								<span className="text-[10px] opacity-70">{option.description}</span>
+							)}
+						</Tag>
+					))}
+				</TagGroup.List>
+			</TagGroup>
+		</div>
+	);
+}
 export function ExportSettingsMenu({
 	exportFormat,
 	onExportFormatChange,
@@ -74,392 +124,146 @@ export function ExportSettingsMenu({
 	const isLegacyModel = exportPipelineModel === "legacy";
 
 	return (
-		<div
-			className={cn(
-				"w-full rounded-2xl border border-foreground/10 bg-editor-surface p-3 text-foreground",
-				className,
-			)}
-		>
-			<div className="mb-2 flex items-center justify-between">
-				<span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-					{tSettings("export.title", "Export")}
-				</span>
-			</div>
-
-			<div className="mb-3 flex items-center gap-2">
-				<LayoutGroup id="header-export-format-toggle">
-					{(
-						[
-							{ value: "mp4", label: tSettings("export.mp4"), icon: Film },
-							{ value: "gif", label: tSettings("export.gif"), icon: Image },
-						] as const
-					).map((option) => {
-						const Icon = option.icon;
-						const isActive = exportFormat === option.value;
-						return (
-							<button
-								key={option.value}
-								type="button"
-								onClick={() => onExportFormatChange?.(option.value)}
-								aria-pressed={isActive}
-								className={cn(
-									"relative flex-1 overflow-hidden rounded-xl border py-2 text-xs font-medium transition-colors",
-									isActive
-										? "border-[#2563EB]/50 text-[#2563EB] dark:text-white"
-										: "border-foreground/10 bg-foreground/5 text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
-								)}
-							>
-								{isActive ? (
-									<motion.span
-										layoutId="header-export-format-pill"
-										className="absolute inset-0 rounded-xl bg-[#2563EB]/10"
-										transition={{ type: "spring", stiffness: 380, damping: 32 }}
-									/>
-								) : null}
-								<span className="relative z-10 flex items-center justify-center gap-1.5">
-									<Icon className="h-3.5 w-3.5" />
-									{option.label}
+		<Card className={className}>
+			<Card.Header>
+				<Card.Title>{tSettings("export.title", "Export")}</Card.Title>
+			</Card.Header>
+			<Card.Content className="gap-4">
+				<Choices
+					label={tSettings("export.format", "Format")}
+					value={exportFormat}
+					onChange={onExportFormatChange}
+					options={[
+						{
+							value: "mp4",
+							textValue: tSettings("export.mp4"),
+							label: (
+								<span className="flex items-center gap-2">
+									<Film />
+									{tSettings("export.mp4")}
 								</span>
-							</button>
-						);
-					})}
-				</LayoutGroup>
-			</div>
-
-			{exportFormat === "mp4" ? (
-				<LayoutGroup id="header-export-quality-toggle">
-					<div className="mb-3 grid min-h-12 w-full grid-cols-4 rounded-xl border border-foreground/5 bg-foreground/5 p-0.5">
-						{(
-							[
-								{ value: "medium", label: tSettings("export.quality.low") },
-								{ value: "good", label: tSettings("export.quality.medium") },
-								{ value: "high", label: tSettings("export.quality.high") },
-								{ value: "source", label: tSettings("export.quality.original") },
-							] as const
-						).map((option) => {
-							const isActive = exportQuality === option.value;
-							return (
-								<button
-									key={option.value}
-									type="button"
-									onClick={() => onExportQualityChange?.(option.value)}
-									aria-pressed={isActive}
-									className="relative rounded-lg px-1 py-1 text-[11px] font-medium transition-colors"
-								>
-									{isActive ? (
-										<motion.span
-											layoutId="header-export-quality-pill"
-											className="absolute inset-0 rounded-lg bg-neutral-800 dark:bg-white"
-											transition={{
-												type: "spring",
-												stiffness: 420,
-												damping: 34,
-											}}
-										/>
-									) : null}
-									<span className="relative z-10 flex h-full flex-col items-center justify-center leading-tight">
-										<span
-											className={cn(
-												isActive
-													? "text-white dark:text-black"
-													: "text-muted-foreground hover:text-foreground",
-											)}
-										>
-											{option.label}
-										</span>
-										{mp4OutputDimensions ? (
-											<span
-												className={cn(
-													"mt-0.5 text-[9px]",
-													isActive
-														? "text-white/75 dark:text-black/75"
-														: "text-muted-foreground/70",
-												)}
-											>
-												{mp4OutputDimensions[option.value].width} x{" "}
-												{mp4OutputDimensions[option.value].height}
-											</span>
-										) : null}
-									</span>
-								</button>
-							);
-						})}
-					</div>
-					<div className="mb-1 flex items-center justify-between px-1">
-						<span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
-							{tSettings("export.encodingTitle", "Encoding")}
-						</span>
-					</div>
-					<div className="mb-3 grid min-h-10 w-full grid-cols-3 rounded-xl border border-foreground/5 bg-foreground/5 p-0.5">
-						{(
-							[
-								{ value: "fast", label: tSettings("export.encoding.fast", "Fast") },
-								{
-									value: "balanced",
-									label: tSettings("export.encoding.balanced", "Balanced"),
-								},
-								{
-									value: "quality",
-									label: tSettings("export.encoding.quality", "Quality"),
-								},
-							] as const
-						).map((option) => {
-							const isActive = exportEncodingMode === option.value;
-							return (
-								<button
-									key={option.value}
-									type="button"
-									onClick={() => onExportEncodingModeChange?.(option.value)}
-									aria-pressed={isActive}
-									className="relative rounded-lg px-1 py-1 text-[11px] font-medium transition-colors"
-								>
-									{isActive ? (
-										<motion.span
-											layoutId="header-export-encoding-pill"
-											className="absolute inset-0 rounded-lg bg-neutral-800 dark:bg-white"
-											transition={{
-												type: "spring",
-												stiffness: 420,
-												damping: 34,
-											}}
-										/>
-									) : null}
-									<span
-										className={cn(
-											"relative z-10",
-											isActive
-												? "text-white dark:text-black"
-												: "text-muted-foreground hover:text-foreground",
-										)}
-									>
-										{option.label}
-									</span>
-								</button>
-							);
-						})}
-					</div>
-					<div className="mb-1 flex items-center justify-between px-1">
-						<span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/70">
-							{tSettings("export.fpsTitle", "FPS")}
-						</span>
-					</div>
-					<div className="mb-3 grid min-h-10 w-full grid-cols-3 rounded-xl border border-foreground/5 bg-foreground/5 p-0.5">
-						{MP4_FRAME_RATES.map((rate) => {
-							const isActive = mp4FrameRate === rate;
-							return (
-								<button
-									key={rate}
-									type="button"
-									onClick={() => onMp4FrameRateChange?.(rate)}
-									aria-pressed={isActive}
-									className="relative rounded-lg px-1 py-1 text-[11px] font-medium transition-colors"
-								>
-									{isActive ? (
-										<motion.span
-											layoutId="header-export-fps-pill"
-											className="absolute inset-0 rounded-lg bg-neutral-800 dark:bg-white"
-											transition={{
-												type: "spring",
-												stiffness: 420,
-												damping: 34,
-											}}
-										/>
-									) : null}
-									<span
-										className={cn(
-											"relative z-10",
-											isActive
-												? "text-white dark:text-black"
-												: "text-muted-foreground hover:text-foreground",
-										)}
-									>
-										{rate}
-									</span>
-								</button>
-							);
-						})}
-					</div>
-					{!isLegacyModel && nvidiaCudaExportAvailable ? (
-						<div className="mb-3 flex min-h-12 items-center justify-between gap-3 rounded-lg border border-[#2563EB]/20 bg-[#2563EB]/5 px-3 py-2">
-							<div className="min-w-0">
-								<div className="flex items-center gap-1.5">
-									<span className="text-[11px] font-semibold text-foreground">
-										{tSettings("export.nvidiaCuda.title", "NVIDIA CUDA")}
-									</span>
-									<span className="rounded bg-[#2563EB]/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-[#2563EB]">
-										{tSettings("export.nvidiaCuda.badge", "Experimental")}
-									</span>
-								</div>
-								<p className="mt-0.5 truncate text-[10px] text-muted-foreground/75">
-									{tSettings(
-										"export.nvidiaCuda.hint",
-										"Try GPU export on this Windows device.",
-									)}
-								</p>
-							</div>
+							),
+						},
+						{
+							value: "gif",
+							textValue: tSettings("export.gif"),
+							label: (
+								<span className="flex items-center gap-2">
+									<Image />
+									{tSettings("export.gif")}
+								</span>
+							),
+						},
+					]}
+				/>
+				{exportFormat === "mp4" ? (
+					<>
+						<Choices
+							label={tSettings("export.qualityTitle", "Quality")}
+							value={exportQuality}
+							onChange={onExportQualityChange}
+							options={(["medium", "good", "high", "source"] as const).map(
+								(value, index) => ({
+									value,
+									label: tSettings(
+										`export.quality.${["low", "medium", "high", "original"][index]}`,
+									),
+									description: mp4OutputDimensions
+										? `${mp4OutputDimensions[value].width} × ${mp4OutputDimensions[value].height}`
+										: undefined,
+								}),
+							)}
+						/>
+						<Choices
+							label={tSettings("export.encodingTitle", "Encoding")}
+							value={exportEncodingMode}
+							onChange={onExportEncodingModeChange}
+							options={(["fast", "balanced", "quality"] as const).map((value) => ({
+								value,
+								label: tSettings(
+									`export.encoding.${value}`,
+									{ fast: "Fast", balanced: "Balanced", quality: "Quality" }[
+										value
+									],
+								),
+							}))}
+						/>
+						<Choices
+							label={tSettings("export.fpsTitle", "FPS")}
+							value={mp4FrameRate}
+							onChange={onMp4FrameRateChange}
+							options={MP4_FRAME_RATES.map((value) => ({
+								value,
+								label: String(value),
+							}))}
+						/>
+						{!isLegacyModel && nvidiaCudaExportAvailable && (
 							<Switch
 								checked={experimentalNvidiaCudaExport}
 								onCheckedChange={onExperimentalNvidiaCudaExportChange}
-								aria-label={tSettings(
-									"export.nvidiaCuda.toggle",
-									"Enable experimental NVIDIA CUDA export",
-								)}
-								className="shrink-0 scale-75 data-[state=checked]:bg-[#2563EB]"
-							/>
-						</div>
-					) : null}
-					{showCaptionSidecarOption ? (
-						<div className="mb-3 flex min-h-12 items-center justify-between gap-3 rounded-lg border border-foreground/10 bg-foreground/5 px-3 py-2">
-							<div className="min-w-0">
-								<p className="text-[11px] font-semibold text-foreground">
-									{tSettings(
-										"export.captionSidecar.title",
-										"Export captions file",
-									)}
-								</p>
-								<p className="mt-0.5 truncate text-[10px] text-muted-foreground/75">
+							>
+								<Label>{tSettings("export.nvidiaCuda.title", "NVIDIA CUDA")}</Label>
+							</Switch>
+						)}
+						{showCaptionSidecarOption && (
+							<div>
+								<Switch
+									checked={includeCaptionSidecar}
+									onCheckedChange={onIncludeCaptionSidecarChange}
+								>
+									<Label>
+										{tSettings(
+											"export.captionSidecar.title",
+											"Export captions file",
+										)}
+									</Label>
+								</Switch>
+								<Description>
 									{tSettings(
 										"export.captionSidecar.hint",
 										"Save .srt and .vtt files next to your exported video.",
 									)}
-								</p>
+								</Description>
 							</div>
-							<Switch
-								checked={includeCaptionSidecar}
-								onCheckedChange={onIncludeCaptionSidecarChange}
-								aria-label={tSettings(
-									"export.captionSidecar.toggle",
-									"Export captions sidecar files",
-								)}
-								className="shrink-0 scale-75 data-[state=checked]:bg-[#2563EB]"
-							/>
-						</div>
-					) : null}
-				</LayoutGroup>
-			) : (
-				<div className="mb-3 space-y-2">
-					<div className="flex items-center gap-2">
-						<LayoutGroup id="header-gif-frame-rate-toggle">
-							<div className="grid h-8 flex-1 grid-cols-4 rounded-xl border border-foreground/5 bg-foreground/5 p-0.5">
-								{GIF_FRAME_RATES.map((rate) => {
-									const isActive = gifFrameRate === rate.value;
-									return (
-										<button
-											key={rate.value}
-											type="button"
-											onClick={() => onGifFrameRateChange?.(rate.value)}
-											aria-pressed={isActive}
-											className="relative rounded-lg text-[11px] font-medium transition-colors"
-										>
-											{isActive ? (
-												<motion.span
-													layoutId="header-gif-frame-rate-pill"
-													className="absolute inset-0 rounded-lg bg-neutral-800 dark:bg-white"
-													transition={{
-														type: "spring",
-														stiffness: 420,
-														damping: 34,
-													}}
-												/>
-											) : null}
-											<span
-												className={cn(
-													"relative z-10",
-													isActive
-														? "text-white dark:text-black"
-														: "text-muted-foreground hover:text-foreground",
-												)}
-											>
-												{rate.value}
-											</span>
-										</button>
-									);
-								})}
-							</div>
-						</LayoutGroup>
-						<LayoutGroup id="header-gif-size-toggle">
-							<div className="grid h-8 flex-1 grid-cols-3 rounded-xl border border-foreground/5 bg-foreground/5 p-0.5">
-								{Object.entries(GIF_SIZE_PRESETS).map(([key]) => {
-									const isActive = gifSizePreset === key;
-									return (
-										<button
-											key={key}
-											type="button"
-											onClick={() =>
-												onGifSizePresetChange?.(key as GifSizePreset)
-											}
-											aria-pressed={isActive}
-											className="relative rounded-lg text-[11px] font-medium transition-colors"
-										>
-											{isActive ? (
-												<motion.span
-													layoutId="header-gif-size-pill"
-													className="absolute inset-0 rounded-lg bg-neutral-800 dark:bg-white"
-													transition={{
-														type: "spring",
-														stiffness: 420,
-														damping: 34,
-													}}
-												/>
-											) : null}
-											<span
-												className={cn(
-													"relative z-10",
-													isActive
-														? "text-white dark:text-black"
-														: "text-muted-foreground hover:text-foreground",
-												)}
-											>
-												{key === "original"
-													? tSettings(
-															"export.sizePresetOriginalShort",
-															"Orig",
-														)
-													: key === "medium"
-														? tSettings(
-																"export.sizePresetMediumShort",
-																"Med",
-															)
-														: tSettings(
-																"export.sizePresetLargeShort",
-																"Lar",
-															)}
-											</span>
-										</button>
-									);
-								})}
-							</div>
-						</LayoutGroup>
-					</div>
-					<div className="flex items-center justify-between px-1">
-						<span className="text-[10px] text-muted-foreground/70">
+						)}
+					</>
+				) : (
+					<>
+						<Choices
+							label={tSettings("export.fpsTitle", "FPS")}
+							value={gifFrameRate}
+							onChange={onGifFrameRateChange}
+							options={GIF_FRAME_RATES.map((rate) => ({
+								value: rate.value,
+								label: String(rate.value),
+							}))}
+						/>
+						<Choices
+							label={tSettings("export.size", "Size")}
+							value={gifSizePreset}
+							onChange={onGifSizePresetChange}
+							options={Object.entries(GIF_SIZE_PRESETS).map(([key, preset]) => ({
+								value: key as GifSizePreset,
+								label: preset.label,
+							}))}
+						/>
+						<Description>
 							{gifOutputDimensions.width} × {gifOutputDimensions.height}px
-						</span>
-						<div className="flex items-center gap-2">
-							<span className="text-[10px] text-muted-foreground">
-								{tSettings("export.loop")}
-							</span>
-							<Switch
-								checked={gifLoop}
-								onCheckedChange={onGifLoopChange}
-								className="scale-75 data-[state=checked]:bg-[#2563EB]"
-							/>
-						</div>
-					</div>
-				</div>
-			)}
-
-			<Button
-				type="button"
-				size="lg"
-				onClick={onExport}
-				className="h-11 w-full gap-2 rounded-lg bg-[#2563EB] text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#2563EB]/90"
-			>
-				<Download className="h-4 w-4" />
-				{tSettings("export.exportVideo", undefined, {
-					format: exportFormat === "gif" ? "GIF" : "Video",
-				})}
-			</Button>
-		</div>
+						</Description>
+						<Switch checked={gifLoop} onCheckedChange={onGifLoopChange}>
+							<Label>{tSettings("export.loop")}</Label>
+						</Switch>
+					</>
+				)}
+			</Card.Content>
+			<Card.Footer>
+				<Button size="lg" onClick={onExport} className="w-full">
+					<Download />
+					{tSettings("export.exportVideo", undefined, {
+						format: exportFormat === "gif" ? "GIF" : "Video",
+					})}
+				</Button>
+			</Card.Footer>
+		</Card>
 	);
 }

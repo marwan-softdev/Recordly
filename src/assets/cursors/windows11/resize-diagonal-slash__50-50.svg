@@ -1,3 +1,9 @@
-<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M18.9809 20.8111L16.6932 23.0988L17.1508 23.5563H23.5563V17.1508L23.0988 16.6932L20.8111 18.9809L12.5754 10.7452L14.8631 8.45754L14.4056 8H8V14.4056L8.45754 14.8631L10.7452 12.5754L18.9809 20.8111Z" fill="#FFFFFE" stroke="#000001" stroke-miterlimit="10"/>
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
+	 viewBox="0 0 32 32" style="enable-background:new 0 0 32 32;" xml:space="preserve">
+<g transform="translate(0 32) scale(1 -1)">
+<polygon style="fill:#FFFFFE;stroke:#000001;stroke-miterlimit:10;" points="12.20278,28.03294 9.91508,30.32063 10.37262,30.77818
+	16.77818,30.77818 16.77818,24.37262 16.32063,23.91508 14.03294,26.20278 5.79722,17.96706 8.08492,15.67937 7.62738,15.22183
+	1.22183,15.22183 1.22183,21.62738 1.67937,22.08492 3.96706,19.79722 "/>
+</g>
 </svg>

@@ -1,8 +1,13 @@
+import { isHudInEditorMode } from "./hudEditorMode";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain } from "electron";
+import {
+	supportsHudCaptureProtection,
+	shouldProtectHudCapture,
+} from "../src/lib/hudCaptureProtection";
 import { USER_DATA_PATH } from "./appPaths";
 import {
 	getHudOverlayWindowBounds,
@@ -34,6 +39,7 @@ let hudOverlayIgnoringMouse = true;
 let hudOverlaySourceSelectionActive = false;
 let hudOverlayMouseReassertTimer: NodeJS.Timeout | null = null;
 let hudOverlayRecordingActive = false;
+let hudCaptureStarting = false;
 let hudOverlayWebcamPreviewVisible = false;
 let countdownWindow: BrowserWindow | null = null;
 let updateToastWindow: BrowserWindow | null = null;
@@ -114,10 +120,6 @@ function getEditorWindowQuery(): Record<string, string> {
 	return query;
 }
 
-function isHudOverlayCaptureProtectionSupported(): boolean {
-	return process.platform !== "linux";
-}
-
 export function isHudOverlayMousePassthroughSupported(): boolean {
 	return process.platform !== "linux";
 }
@@ -144,6 +146,46 @@ function loadHudOverlayCaptureProtectionSetting(): boolean {
 	}
 
 	return hudOverlayHiddenFromCapture;
+}
+
+export function getHudOverlayCaptureProtectionEnabled(): boolean {
+	return loadHudOverlayCaptureProtectionSetting();
+}
+
+function applyHudOverlayCaptureProtectionToWindow(hud: BrowserWindow, enabled: boolean): void {
+	if (!supportsHudCaptureProtection(process.platform)) {
+		return;
+	}
+
+	try {
+		// Keep the idle HUD visible to screenshots and other capture applications.
+		hud.setContentProtection(
+			shouldProtectHudCapture(enabled, hudOverlayRecordingActive, hudCaptureStarting),
+		);
+	} catch (error) {
+		console.warn("Failed to apply HUD capture protection:", error);
+	}
+}
+
+export function beginHudCaptureProtection(): void {
+	hudCaptureStarting = true;
+	reassertHudOverlayCaptureProtection();
+}
+ipcMain.handle("finish-recording-startup", () => {
+	hudCaptureStarting = false;
+	reassertHudOverlayCaptureProtection();
+});
+
+export function reassertHudOverlayCaptureProtection(): boolean {
+	const enabled = loadHudOverlayCaptureProtectionSetting();
+	const hud = getHudOverlayWindow();
+	if (!hud) {
+		return enabled;
+	}
+
+	applyHudOverlayCaptureProtectionToWindow(hud, enabled);
+
+	return enabled;
 }
 
 function persistHudOverlayCaptureProtectionSetting(enabled: boolean): void {
@@ -413,13 +455,7 @@ ipcMain.handle("set-hud-overlay-capture-protection", (_event, enabled: boolean) 
 	hudOverlayHiddenFromCapture = Boolean(enabled);
 	persistHudOverlayCaptureProtectionSetting(hudOverlayHiddenFromCapture);
 
-	if (
-		isHudOverlayCaptureProtectionSupported() &&
-		hudOverlayWindow &&
-		!hudOverlayWindow.isDestroyed()
-	) {
-		hudOverlayWindow.setContentProtection(hudOverlayHiddenFromCapture);
-	}
+	reassertHudOverlayCaptureProtection();
 
 	return {
 		success: true,
@@ -427,7 +463,28 @@ ipcMain.handle("set-hud-overlay-capture-protection", (_event, enabled: boolean) 
 	};
 });
 
+const editorWindows = new Set<BrowserWindow>();
+let recordingPreparationActive = false;
+function getHudEditorMode() {
+	return isHudInEditorMode(
+		editorWindows.size,
+		recordingPreparationActive,
+		hudOverlayRecordingActive,
+	);
+}
+export function setHudRecordingPreparationActive(active: boolean) {
+	recordingPreparationActive = active;
+	notifyEditorMode();
+}
+function notifyEditorMode() {
+	if (hudOverlayWindow && !hudOverlayWindow.webContents.isDestroyed()) {
+		hudOverlayWindow.webContents.send("editor-mode-changed", getHudEditorMode());
+	}
+}
+ipcMain.handle("get-editor-mode", getHudEditorMode);
+
 export function createHudOverlayWindow(): BrowserWindow {
+	const perfStart = Date.now();
 	loadHudOverlayCaptureProtectionSetting();
 	hudOverlayFallbackExpanded = false;
 	hudOverlayWebcamPreviewVisible = false;
@@ -463,6 +520,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 	if (process.platform === "darwin") {
 		win.setVisibleOnAllWorkspaces(true, {
 			visibleOnFullScreen: true,
+			skipTransformProcessType: true,
 		});
 	}
 
@@ -479,6 +537,9 @@ export function createHudOverlayWindow(): BrowserWindow {
 			return;
 		}
 		hasShownHudWindow = true;
+		// Showing or changing native window state can recreate platform window
+		// flags. Reassert capture protection on both sides of the transition.
+		applyHudOverlayCaptureProtectionToWindow(win, hudOverlayHiddenFromCapture);
 		if (process.platform === "win32") {
 			// A focusable window is required for a Windows taskbar entry, but the
 			// always-on-top HUD must not steal focus when Recordly starts.
@@ -487,6 +548,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 			win.show();
 		}
 		win.moveTop();
+		applyHudOverlayCaptureProtectionToWindow(win, hudOverlayHiddenFromCapture);
 		if (process.platform === "win32" && isHudOverlayMousePassthroughSupported()) {
 			win.setIgnoreMouseEvents(false);
 			setTimeout(() => {
@@ -497,9 +559,12 @@ export function createHudOverlayWindow(): BrowserWindow {
 		}
 	};
 
-	if (isHudOverlayCaptureProtectionSupported()) {
-		win.setContentProtection(hudOverlayHiddenFromCapture);
-	}
+	applyHudOverlayCaptureProtectionToWindow(win, hudOverlayHiddenFromCapture);
+	win.on("show", () => {
+		if (!win.isDestroyed()) {
+			applyHudOverlayCaptureProtectionToWindow(win, hudOverlayHiddenFromCapture);
+		}
+	});
 
 	if (isHudOverlayMousePassthroughSupported()) {
 		if (hudOverlayRecordingActive) {
@@ -530,6 +595,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 	}
 
 	win.webContents.on("did-finish-load", () => {
+		console.log(`[PERF:MAIN] HUD Window: did-finish-load in ${Date.now() - perfStart}ms`);
 		win?.webContents.send("main-process-message", new Date().toLocaleString());
 		// Safety fallback if renderer-ready signal never arrives.
 		setTimeout(() => {
@@ -550,6 +616,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 
 	const handleHudRendererReady = () => {
 		if (!win.isDestroyed()) {
+			console.log(`[PERF:MAIN] HUD Window: renderer-ready in ${Date.now() - perfStart}ms`);
 			showHudWindow();
 		}
 	};
@@ -598,6 +665,9 @@ export function createHudOverlayWindow(): BrowserWindow {
 		screen.removeListener("display-metrics-changed", handleDisplayMetricsChanged);
 		if (hudOverlayWindow === win) {
 			hudOverlayWindow = null;
+			recordingPreparationActive = false;
+			hudCaptureStarting = false;
+			hudOverlayRecordingActive = false;
 		}
 	});
 
@@ -651,9 +721,12 @@ export function reassertHudOverlayMousePassthrough(): void {
 }
 
 export function setHudOverlayRecordingActive(recording: boolean): void {
+	hudCaptureStarting = false;
 	hudOverlayRecordingActive = Boolean(recording);
+	notifyEditorMode();
 	hudOverlayFallbackExpanded = false;
 	applyHudOverlayBounds();
+	reassertHudOverlayCaptureProtection();
 	// Start in passthrough mode. Forwarded pointer movement lets the renderer
 	// make the visible HUD controls interactive when the pointer reaches them,
 	// while transparent parts never block the recorded application.
@@ -888,7 +961,7 @@ export function createEditorWindow(): BrowserWindow {
 		}),
 		...(isMac && {
 			titleBarStyle: "hiddenInset",
-			trafficLightPosition: { x: 12, y: 12 },
+			trafficLightPosition: { x: 16, y: 20 },
 		}),
 		autoHideMenuBar: !isMac,
 		transparent: false,
@@ -906,6 +979,25 @@ export function createEditorWindow(): BrowserWindow {
 			backgroundThrottling: false,
 		},
 	});
+
+	recordingPreparationActive = false;
+	editorWindows.add(win);
+	notifyEditorMode();
+	win.once("closed", () => {
+		editorWindows.delete(win);
+		notifyEditorMode();
+	});
+
+	const publishWindowChrome = () => {
+		if (!win.isDestroyed())
+			win.webContents.send("window-chrome-changed", {
+				trafficLightsVisible: isMac && !win.isFullScreen() && !win.isSimpleFullScreen(),
+			});
+	};
+	win.on("enter-full-screen", publishWindowChrome);
+	win.on("leave-full-screen", publishWindowChrome);
+	win.on("resize", publishWindowChrome);
+	win.webContents.on("did-finish-load", publishWindowChrome);
 
 	win.once("ready-to-show", () => {
 		console.log(`[PERF:MAIN] Editor Window: ready-to-show in ${Date.now() - perfStart}ms`);
@@ -940,6 +1032,14 @@ export function createEditorWindow(): BrowserWindow {
 
 	win.on("focus", () => {
 		console.log("[editor-window] focus");
+	});
+
+	win.on("enter-full-screen", () => {
+		if (!win.isDestroyed()) win.webContents.send("window-fullscreen-changed", true);
+	});
+
+	win.on("leave-full-screen", () => {
+		if (!win.isDestroyed()) win.webContents.send("window-fullscreen-changed", false);
 	});
 
 	if (VITE_DEV_SERVER_URL) {

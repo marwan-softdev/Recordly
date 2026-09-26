@@ -29,7 +29,7 @@ export function CropEditorDialog({
 }: Props) {
 	return (
 		<Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onCancel()}>
-			<DialogContent className="max-h-[90vh] w-[90vw] max-w-5xl overflow-auto rounded-2xl border-foreground/10 bg-editor-dialog p-8 shadow-2xl">
+			<DialogContent className="max-h-[90vh] w-[90vw] max-w-5xl overflow-auto p-8">
 				<div className="mb-6 flex items-center justify-between">
 					<div>
 						<DialogTitle className="text-xl font-bold text-foreground">
@@ -47,11 +47,7 @@ export function CropEditorDialog({
 					aspectRatio={aspectRatio}
 				/>
 				<div className="mt-6 flex justify-end">
-					<Button
-						onClick={onDone}
-						size="lg"
-						className="bg-[#2563EB] text-white hover:bg-[#2563EB]/90"
-					>
+					<Button onClick={onDone} size="lg">
 						{t("common.actions.done")}
 					</Button>
 				</div>

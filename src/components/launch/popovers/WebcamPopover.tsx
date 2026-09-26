@@ -3,7 +3,7 @@ import {
 	EyeSlash as EyeOff,
 	VideoCamera as Video,
 	VideoCameraSlash as VideoOff,
-} from "@phosphor-icons/react";
+} from "@/components/ui/icons";
 import { useScopedT } from "@/contexts/I18nContext";
 import { DropdownItem, HudPopover } from "./PopoverScaffold";
 import { useLaunchPopoverCoordinator } from "./LaunchPopoverCoordinator";
