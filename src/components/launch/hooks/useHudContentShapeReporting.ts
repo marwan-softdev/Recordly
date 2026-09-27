@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-const RADIX_POPOVER_WRAPPER_SELECTOR = "[data-radix-popper-content-wrapper]";
+const POPOVER_SELECTOR = "[data-hud-popover]";
 const POLL_INTERVAL_MS = 150;
 
 type ShapeRect = { x: number; y: number; width: number; height: number };
@@ -30,7 +30,7 @@ function shapeKey(shape: { bar: ShapeRect; popover: ShapeRect | null }): string 
  * painted nor hit-tested, so there are no dead click zones.
  *
  * ResizeObserver catches layout changes (recording bar, webcam preview,
- * device lists); a light poll covers the Radix popover wrapper mounting and
+ * device lists); a light poll covers the popover mounting and
  * repositioning. Reports are deduped, so the IPC only fires on real changes.
  */
 export function useHudContentShapeReporting({
@@ -55,9 +55,7 @@ export function useHudContentShapeReporting({
 			if (!contentEl || !window.electronAPI?.hudOverlaySetContentShape) {
 				return;
 			}
-			const popoverEl = openId
-				? document.querySelector(RADIX_POPOVER_WRAPPER_SELECTOR)
-				: null;
+			const popoverEl = openId ? document.querySelector(POPOVER_SELECTOR) : null;
 			const shape = {
 				bar: toRect(contentEl.getBoundingClientRect()),
 				popover: popoverEl ? toRect(popoverEl.getBoundingClientRect()) : null,
@@ -87,9 +85,7 @@ export function useHudContentShapeReporting({
 		const popoverObserver = new ResizeObserver(scheduleReport);
 
 		const attachPopoverObserver = () => {
-			const popoverEl = openId
-				? document.querySelector(RADIX_POPOVER_WRAPPER_SELECTOR)
-				: null;
+			const popoverEl = openId ? document.querySelector(POPOVER_SELECTOR) : null;
 			if (popoverEl) {
 				popoverObserver.observe(popoverEl);
 				return true;
@@ -99,7 +95,7 @@ export function useHudContentShapeReporting({
 
 		scheduleReport();
 		let attached = attachPopoverObserver();
-		// The Radix wrapper mounts a tick after the open state flips; a short
+		// The popover mounts a tick after the open state flips; a short
 		// poll covers that window (and repositions as menus resize).
 		const poll = openId
 			? setInterval(() => {

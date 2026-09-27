@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { computeHudGrowContentSize } from "@/lib/hudGrowSize";
 
-const RADIX_POPOVER_WRAPPER_SELECTOR = "[data-radix-popper-content-wrapper]";
+const POPOVER_SELECTOR = "[data-hud-popover]";
 const POLL_INTERVAL_MS = 150;
 
 function toDomRect(rect: DOMRect) {
@@ -15,8 +15,8 @@ function toDomRect(rect: DOMRect) {
  * the bar (anchored to the window's top) never moves and the menu appears in
  * the space that opens up underneath it.
  *
- * ResizeObserver catches layout changes; a light poll covers the Radix
- * popover wrapper mounting and repositioning. Reports are deduped.
+ * ResizeObserver catches layout changes; a light poll covers the popover
+ * mounting and repositioning. Reports are deduped.
  */
 export function useHudGrowSizeReporting({
 	enabled,
@@ -40,9 +40,7 @@ export function useHudGrowSizeReporting({
 			if (!contentEl || !window.electronAPI?.hudOverlaySetContentSize) {
 				return;
 			}
-			const popoverEl = openId
-				? document.querySelector(RADIX_POPOVER_WRAPPER_SELECTOR)
-				: null;
+			const popoverEl = openId ? document.querySelector(POPOVER_SELECTOR) : null;
 			if (openId && !popoverEl) {
 				// A menu was just requested; the main process pre-grew the window
 				// for it. Reporting the bar-only size here would shrink that
@@ -81,9 +79,7 @@ export function useHudGrowSizeReporting({
 		const popoverObserver = new ResizeObserver(scheduleReport);
 
 		const attachPopoverObserver = () => {
-			const popoverEl = openId
-				? document.querySelector(RADIX_POPOVER_WRAPPER_SELECTOR)
-				: null;
+			const popoverEl = openId ? document.querySelector(POPOVER_SELECTOR) : null;
 			if (popoverEl) {
 				popoverObserver.observe(popoverEl);
 				return true;
